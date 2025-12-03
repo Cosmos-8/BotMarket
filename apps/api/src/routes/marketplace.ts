@@ -1,8 +1,9 @@
 import { Router, Response } from 'express';
+import type { Router as IRouter } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthenticatedRequest } from '../middleware/auth';
 
-const router = Router();
+const router: IRouter = Router();
 
 /**
  * GET /marketplace

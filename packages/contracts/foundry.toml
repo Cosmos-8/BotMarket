@@ -10,3 +10,12 @@ via_ir = false
 [profile.ci]
 fuzz = { runs = 256 }
 
+# RPC endpoints
+[rpc_endpoints]
+base_sepolia = "https://sepolia.base.org"
+localhost = "http://localhost:8545"
+
+# Etherscan API for verification (optional)
+[etherscan]
+base_sepolia = { key = "${BASESCAN_API_KEY}", url = "https://api-sepolia.basescan.org/api" }
+

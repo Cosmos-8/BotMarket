@@ -8,7 +8,12 @@
     "build": "pnpm --recursive build",
     "test": "pnpm --recursive test",
     "lint": "pnpm --recursive lint",
-    "clean": "pnpm --recursive clean"
+    "clean": "pnpm --recursive clean",
+    "seed": "pnpm --filter @botmarket/api db:seed",
+    "db:setup": "pnpm --filter @botmarket/api db:generate && pnpm --filter @botmarket/api db:migrate && pnpm seed",
+    "deploy:contracts": "pnpm --filter @botmarket/contracts deploy:base-sepolia",
+    "contracts:build": "pnpm --filter @botmarket/contracts build",
+    "contracts:test": "pnpm --filter @botmarket/contracts test"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Express } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { prisma } from './lib/prisma';
@@ -8,7 +8,7 @@ import { tradeSignalQueue } from './lib/queue';
 // Load environment variables
 dotenv.config();
 
-const app = express();
+const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
@@ -39,12 +39,14 @@ import botRoutes from './routes/bots';
 import webhookRoutes from './routes/webhook';
 import marketplaceRoutes from './routes/marketplace';
 import adminRoutes from './routes/admin';
+import balanceRoutes from './routes/balance';
 
 app.use('/auth', authRoutes);
 app.use('/bots', botRoutes);
 app.use('/webhook', webhookRoutes);
 app.use('/marketplace', marketplaceRoutes);
 app.use('/admin', adminRoutes);
+app.use('/balance', balanceRoutes);
 
 // Start market cache service
 import './services/marketCacheService';
