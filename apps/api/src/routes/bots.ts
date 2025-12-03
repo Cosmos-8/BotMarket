@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import type { Router as IRouter } from 'express';
 import { prisma } from '../lib/prisma';
 import { tradeSignalQueue } from '../lib/queue';
 import { AuthenticatedRequest, verifyWallet } from '../middleware/auth';
@@ -10,7 +11,7 @@ import {
 } from '@botmarket/shared';
 import { getAddress } from 'ethers';
 
-const router = Router();
+const router: IRouter = Router();
 
 /**
  * POST /bots

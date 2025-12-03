@@ -4,7 +4,10 @@
   "scripts": {
     "build": "forge build",
     "test": "forge test",
-    "clean": "forge clean"
+    "clean": "forge clean",
+    "deploy:base-sepolia": "forge script script/DeployBotRegistry.s.sol --rpc-url https://sepolia.base.org --broadcast",
+    "deploy:base-sepolia:verify": "forge script script/DeployBotRegistry.s.sol --rpc-url https://sepolia.base.org --broadcast --verify",
+    "deploy:local": "forge script script/DeployBotRegistry.s.sol --rpc-url http://localhost:8545 --broadcast"
   },
   "devDependencies": {
     "forge-std": "^1.0.0"

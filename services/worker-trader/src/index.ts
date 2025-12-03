@@ -3,10 +3,13 @@ import dotenv from 'dotenv';
 import { prisma } from './lib/prisma';
 import { redis } from './lib/redis';
 import { processTradeSignal } from './processors/tradeSignal';
+import { logTradingMode } from './lib/mockExecution';
 
 dotenv.config();
 
-console.log('Starting Trader Worker...');
+console.log('');
+console.log('🤖 Starting Trader Worker...');
+logTradingMode();
 
 // Create worker
 const worker = new Worker(

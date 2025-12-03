@@ -1,9 +1,10 @@
 import { Router, Response } from 'express';
+import type { Router as IRouter } from 'express';
 import { prisma } from '../lib/prisma';
 import { metricsQueue } from '../lib/queue';
 import { AuthenticatedRequest } from '../middleware/auth';
 
-const router = Router();
+const router: IRouter = Router();
 
 // Simple admin check (for MVP - should be more secure in production)
 const ADMIN_ADDRESSES = (process.env.ADMIN_ADDRESSES || '').split(',').filter(Boolean);

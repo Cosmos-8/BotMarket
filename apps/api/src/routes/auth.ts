@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
+import type { Router as IRouter } from 'express';
 import { getAddress } from 'ethers';
 
-const router = Router();
+const router: IRouter = Router();
 
 /**
  * POST /auth/siwe

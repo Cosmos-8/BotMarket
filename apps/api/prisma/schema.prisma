@@ -13,7 +13,9 @@ datasource db {
 model User {
   id          String   @id @default(cuid())
   baseAddress String   @unique
+  usdcBalance Float    @default(0) // USDC trading balance (mock, offchain)
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
 
   createdBots Bot[]
 }
