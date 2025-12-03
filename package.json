@@ -1,0 +1,22 @@
+{
+  "name": "botmarket",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BotMarket - No-Code Polymarket Bot Builder + Marketplace",
+  "scripts": {
+    "dev": "pnpm --parallel --filter './apps/*' --filter './services/*' dev",
+    "build": "pnpm --recursive build",
+    "test": "pnpm --recursive test",
+    "lint": "pnpm --recursive lint",
+    "clean": "pnpm --recursive clean"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.6"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}
+

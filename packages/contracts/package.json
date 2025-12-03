@@ -1,0 +1,13 @@
+{
+  "name": "@botmarket/contracts",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "clean": "forge clean"
+  },
+  "devDependencies": {
+    "forge-std": "^1.0.0"
+  }
+}
+

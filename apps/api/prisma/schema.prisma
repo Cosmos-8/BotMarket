@@ -1,0 +1,139 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  baseAddress String   @unique
+  createdAt   DateTime @default(now())
+
+  createdBots Bot[]
+}
+
+model Bot {
+  id           String   @id @default(cuid())
+  botId        String   @unique // On-chain bot ID
+  creator      String   // Base address
+  parentBotId  String?  // For forked bots
+  visibility   String   @default("PUBLIC") // PUBLIC or PRIVATE
+  metadataURI  String?  // IPFS or API-hosted metadata
+  configHash   String   // Hash of config for on-chain verification
+  createdAt    DateTime @default(now())
+
+  creatorUser User?     @relation(fields: [creator], references: [baseAddress])
+  parentBot   Bot?      @relation("BotFork", fields: [parentBotId], references: [botId])
+  forkedBots  Bot[]     @relation("BotFork")
+  configs     BotConfig[]
+  keys        BotKey[]
+  signals     Signal[]
+  orders      Order[]
+  fills       Fill[]
+  metrics     BotMetrics?
+
+  @@index([creator])
+  @@index([parentBotId])
+  @@index([visibility])
+}
+
+model BotConfig {
+  id        String   @id @default(cuid())
+  botId     String
+  configJSON Json     // Stored as JSON
+  version   String   @default("1.0")
+  createdAt DateTime @default(now())
+
+  bot Bot @relation(fields: [botId], references: [botId], onDelete: Cascade)
+
+  @@index([botId])
+}
+
+model BotKey {
+  id              String   @id @default(cuid())
+  botId           String   @unique
+  encryptedPrivKey String
+  keyVersion      String   @default("1.0")
+  createdAt       DateTime @default(now())
+
+  bot Bot @relation(fields: [botId], references: [botId], onDelete: Cascade)
+
+  @@index([botId])
+}
+
+model Signal {
+  id              String   @id @default(cuid())
+  botId           String
+  receivedAt      DateTime @default(now())
+  payloadHash     String
+  parsedSignalJSON Json
+  signalType      String   // LONG, SHORT, CLOSE
+
+  bot Bot @relation(fields: [botId], references: [botId], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([receivedAt])
+}
+
+model Order {
+  id        String   @id @default(cuid())
+  botId     String
+  placedAt  DateTime @default(now())
+  marketId  String
+  outcome   String   // YES or NO
+  side      String   // BUY or SELL
+  price     Float
+  size      Float
+  status    String   @default("PENDING") // PENDING, FILLED, CANCELLED, PARTIALLY_FILLED
+  orderId   String?  // Polymarket order ID
+  tokenId   String?  // CLOB token ID
+
+  bot   Bot    @relation(fields: [botId], references: [botId], onDelete: Cascade)
+  fills Fill[]
+
+  @@index([botId])
+  @@index([status])
+  @@index([placedAt])
+}
+
+model Fill {
+  id        String   @id @default(cuid())
+  botId     String
+  fillAt    DateTime @default(now())
+  orderId   String
+  price     Float
+  size      Float
+  fees      Float    @default(0)
+  fillId    String?  // Polymarket fill ID
+
+  bot   Bot   @relation(fields: [botId], references: [botId], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([botId])
+  @@index([orderId])
+  @@index([fillAt])
+}
+
+model BotMetrics {
+  id          String   @id @default(cuid())
+  botId       String   @unique
+  pnlUsd      Float    @default(0)
+  roiPct      Float    @default(0)
+  trades      Int      @default(0)
+  winRate     Float    @default(0) // 0-100
+  maxDrawdown Float    @default(0) // Negative value
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [botId], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([roiPct])
+  @@index([pnlUsd])
+}
+
