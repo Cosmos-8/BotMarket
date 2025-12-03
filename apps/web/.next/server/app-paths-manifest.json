@@ -1,6 +1,0 @@
-{
-  "/marketplace/page": "app/marketplace/page.js",
-  "/page": "app/page.js",
-  "/create/page": "app/create/page.js",
-  "/bots/[id]/page": "app/bots/[id]/page.js"
-}
