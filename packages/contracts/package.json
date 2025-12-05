@@ -7,6 +7,8 @@
     "clean": "forge clean",
     "deploy:base-sepolia": "forge script script/DeployBotRegistry.s.sol --rpc-url https://sepolia.base.org --broadcast",
     "deploy:base-sepolia:verify": "forge script script/DeployBotRegistry.s.sol --rpc-url https://sepolia.base.org --broadcast --verify",
+    "deploy:base-mainnet": "forge script script/DeployBotRegistry.s.sol --rpc-url https://mainnet.base.org --broadcast",
+    "deploy:base-mainnet:verify": "forge script script/DeployBotRegistry.s.sol --rpc-url https://mainnet.base.org --broadcast --verify",
     "deploy:local": "forge script script/DeployBotRegistry.s.sol --rpc-url http://localhost:8545 --broadcast"
   },
   "devDependencies": {

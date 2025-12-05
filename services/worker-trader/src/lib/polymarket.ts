@@ -305,8 +305,8 @@ export async function submitOrderToPolymarket(
           const errorData = axiosError.response.data;
           const errorMessage = errorData?.error || errorData?.message || `API error ${axiosError.response.status}`;
           console.log(`${COLORS.red}❌ Order submission failed: ${errorMessage}${COLORS.reset}`);
-          
-          return {
+    
+    return {
             orderId: '',
             status: 'CANCELED',
             errorMsg: errorMessage,
@@ -358,54 +358,6 @@ export async function cancelOrder(orderId: string): Promise<boolean> {
     console.error(`Error canceling order ${orderId}:`, error.message);
     return false;
   }
-}
-
-// ============================================================================
-// Legacy Functions (Kept for backwards compatibility)
-// ============================================================================
-
-/**
- * @deprecated Use signPolymarketOrder from polymarketSigning.ts instead
- */
-export async function createOrder(
-  tokenId: string,
-  side: OrderSide,
-  price: number,
-  size: number,
-  privateKey: string
-): Promise<any | null> {
-  console.warn('createOrder is deprecated. Use signPolymarketOrder from polymarketSigning.ts');
-  
-  try {
-    const nonce = Date.now();
-    const expiration = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
-    
-    return {
-      tokenId,
-      side,
-      price: price.toString(),
-      size: size.toString(),
-      nonce,
-      expiration,
-    };
-  } catch (error: any) {
-    console.error('Error creating order:', error);
-    return null;
-  }
-}
-
-/**
- * @deprecated Use submitOrderToPolymarket instead
- */
-export async function submitOrder(
-  order: any,
-  apiKey: string,
-  apiSecret: string,
-  apiPassphrase: string
-): Promise<string | null> {
-  console.warn('submitOrder is deprecated. Use submitOrderToPolymarket instead');
-  console.log('Order submission not fully implemented - requires proper EIP-712 signing');
-  return null;
 }
 
 // ============================================================================
