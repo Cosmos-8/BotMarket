@@ -1,10 +1,22 @@
 import { prisma } from '../lib/prisma';
-import { getMarketData, getTokenIdForOutcome, createOrder, submitOrder } from '../lib/polymarket';
+import { getMarketData, getTokenIdForOutcome, submitOrderToPolymarket } from '../lib/polymarket';
 import {
   mockExecuteOrder,
-  isMockMode,
   MockMarketInfo,
 } from '../lib/mockExecution';
+import {
+  getTradingConfig,
+  isLiveMode,
+  checkTradeSizeCap,
+  checkDailyNotionalCap,
+  validateLiveTradingConfig,
+  TradingConfig,
+} from '../lib/tradingConfig';
+import {
+  signPolymarketOrder,
+  PolymarketOrderInput,
+  OrderSide as PolymarketOrderSide,
+} from '../lib/polymarketSigning';
 import {
   BotConfig,
   SignalType,
@@ -14,6 +26,7 @@ import {
   decryptPrivateKey,
   Outcome,
   OrderSide,
+  ORDER_STATUS,
 } from '@botmarket/shared';
 import { Queue } from 'bullmq';
 import { redis } from '../lib/redis';
@@ -50,11 +63,12 @@ const COLORS = {
   cyan: '\x1b[36m',
 };
 
-function logSignalReceived(botId: string, signal: SignalType): void {
+function logSignalReceived(botId: string, signal: SignalType, mode: string): void {
   console.log('');
   console.log(`${COLORS.bright}${COLORS.blue}📥 SIGNAL RECEIVED${COLORS.reset}`);
   console.log(`${COLORS.cyan}   Bot:${COLORS.reset}    ${botId}`);
   console.log(`${COLORS.cyan}   Signal:${COLORS.reset} ${COLORS.bright}${signal}${COLORS.reset}`);
+  console.log(`${COLORS.cyan}   Mode:${COLORS.reset}   ${mode.toUpperCase()}`);
   console.log(`${COLORS.cyan}   Time:${COLORS.reset}   ${new Date().toISOString()}`);
 }
 
@@ -65,6 +79,14 @@ function logRiskCheckFailed(botId: string, reason: string): void {
   console.log('');
 }
 
+function logSafetyCapViolation(botId: string, type: string, message: string): void {
+  console.log(`${COLORS.bright}${COLORS.yellow}⚠️  SAFETY CAP VIOLATION - SKIPPING LIVE TRADE${COLORS.reset}`);
+  console.log(`${COLORS.cyan}   Bot:${COLORS.reset}       ${botId}`);
+  console.log(`${COLORS.cyan}   Cap Type:${COLORS.reset}  ${type}`);
+  console.log(`${COLORS.cyan}   Details:${COLORS.reset}   ${message}`);
+  console.log('');
+}
+
 function logError(botId: string, error: string): void {
   console.log(`${COLORS.red}❌ ERROR${COLORS.reset}`);
   console.log(`${COLORS.cyan}   Bot:${COLORS.reset}    ${botId}`);
@@ -72,11 +94,43 @@ function logError(botId: string, error: string): void {
   console.log('');
 }
 
-function logTradeComplete(botId: string, signal: SignalType, side: string, outcome: string): void {
+function logTradeComplete(botId: string, signal: SignalType, side: string, outcome: string, mode: string): void {
   console.log(`${COLORS.bright}${COLORS.green}✅ TRADE COMPLETE${COLORS.reset}`);
   console.log(`${COLORS.cyan}   Bot:${COLORS.reset}    ${botId}`);
   console.log(`${COLORS.cyan}   Signal:${COLORS.reset} ${signal} → ${side} ${outcome}`);
+  console.log(`${COLORS.cyan}   Mode:${COLORS.reset}   ${mode.toUpperCase()}`);
   console.log('');
+}
+
+function logLiveOrderSubmitted(orderId: string, mode: string): void {
+  console.log(`${COLORS.bright}${COLORS.magenta}🔴 LIVE ORDER SUBMITTED${COLORS.reset}`);
+  console.log(`${COLORS.cyan}   Order ID:${COLORS.reset} ${orderId}`);
+  console.log(`${COLORS.cyan}   Mode:${COLORS.reset}     ${mode.toUpperCase()}`);
+}
+
+// ============================================================================
+// Safety Cap Helpers
+// ============================================================================
+
+/**
+ * Calculate the total notional traded by a bot in the last 24 hours.
+ */
+async function getDailyNotionalForBot(botExternalId: string): Promise<number> {
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  
+  const orders = await prisma.order.findMany({
+    where: {
+      botId: botExternalId,
+      placedAt: {
+        gte: twentyFourHoursAgo,
+      },
+    },
+    select: {
+      size: true,
+    },
+  });
+  
+  return orders.reduce((sum, order) => sum + order.size, 0);
 }
 
 // ============================================================================
@@ -167,19 +221,21 @@ async function checkRiskRules(
  * Process a trade signal from the queue.
  * 
  * Flow:
- * 1. Load bot configuration
+ * 1. Load bot configuration and trading mode
  * 2. Apply risk rules
- * 3. Determine trade action from signal
- * 4. Discover current market
- * 5. Execute order (mock or live based on ENABLE_LIVE_TRADING)
- * 6. Store results in database
- * 7. Trigger metrics update
+ * 3. For live modes (gamma/mainnet): check safety caps
+ * 4. Determine trade action from signal
+ * 5. Discover current market
+ * 6. Execute order (mock, gamma, or mainnet based on TRADING_MODE)
+ * 7. Store results in database
+ * 8. Trigger metrics update
  */
 export async function processTradeSignal(jobData: TradeSignalJob): Promise<void> {
   const { botId, signal, timestamp } = jobData;
-  const mockMode = isMockMode();
+  const tradingConfig = getTradingConfig();
+  const { mode } = tradingConfig;
 
-  logSignalReceived(botId, signal);
+  logSignalReceived(botId, signal, mode);
 
   try {
     // ========================================================================
@@ -212,7 +268,6 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     // ========================================================================
     if (signal === SIGNAL_TYPES.CLOSE) {
       // TODO: Implement position closing logic
-      // For now, just log the signal
       console.log(`${COLORS.yellow}📤 CLOSE signal received for bot ${botId}${COLORS.reset}`);
       console.log(`${COLORS.dim}   Position closing not yet implemented${COLORS.reset}`);
       return;
@@ -228,7 +283,38 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     }
 
     // ========================================================================
-    // Step 4: Map signal to trade action
+    // Step 4: Calculate order size and check safety caps (for live modes)
+    // ========================================================================
+    const sizeUsd = config.sizing.type === 'fixed_usd' ? config.sizing.value : 25;
+
+    if (isLiveMode(tradingConfig)) {
+      // Check trade size cap
+      const tradeSizeViolation = checkTradeSizeCap(sizeUsd, tradingConfig);
+      if (tradeSizeViolation) {
+        logSafetyCapViolation(botId, 'MAX_TRADE_SIZE', tradeSizeViolation.message);
+        console.log(`${COLORS.yellow}   Max trade size exceeded, skipping live trade.${COLORS.reset}`);
+        return;
+      }
+
+      // Check daily notional cap
+      const dailyNotional = await getDailyNotionalForBot(bot.botId);
+      const dailyCapViolation = checkDailyNotionalCap(dailyNotional, sizeUsd, tradingConfig);
+      if (dailyCapViolation) {
+        logSafetyCapViolation(botId, 'MAX_DAILY_NOTIONAL', dailyCapViolation.message);
+        console.log(`${COLORS.yellow}   Daily notional cap reached for bot ${botId}, skipping live trade.${COLORS.reset}`);
+        return;
+      }
+
+      // Validate live trading configuration
+      const configError = validateLiveTradingConfig(tradingConfig);
+      if (configError) {
+        logError(botId, `Live trading config error: ${configError}`);
+        return;
+      }
+    }
+
+    // ========================================================================
+    // Step 5: Map signal to trade action
     // ========================================================================
     const signalMap = config.webhook.signalMap;
     let tradeAction;
@@ -245,14 +331,14 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     const outcome = tradeAction.outcome as Outcome;
 
     // ========================================================================
-    // Step 5: Discover current market
+    // Step 6: Discover current market
     // ========================================================================
     const { getCurrentMarketId } = await import('@botmarket/shared');
     let marketId = await getCurrentMarketId(config.market.currency, config.market.timeframe);
     
     // If market discovery fails, generate a mock market ID for demo purposes
     if (!marketId) {
-      if (mockMode) {
+      if (mode === 'mock') {
         // Generate deterministic mock market ID for demo
         const dateStr = new Date().toISOString().split('T')[0];
         marketId = `mock_${config.market.currency.toLowerCase()}_${config.market.timeframe}_${dateStr}`;
@@ -262,13 +348,10 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     }
     }
     
-    // Calculate order size
-    const sizeUsd = config.sizing.type === 'fixed_usd' ? config.sizing.value : 25; // Default $25
-
     // ========================================================================
-    // Step 6: Execute order (Mock or Live)
+    // Step 7: Execute order based on trading mode
     // ========================================================================
-    if (mockMode) {
+    if (mode === 'mock') {
       // ======================================================================
       // MOCK EXECUTION PATH
       // ======================================================================
@@ -288,14 +371,13 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
         marketInfo,
       });
 
-      logTradeComplete(botId, signal, side, outcome);
+      logTradeComplete(botId, signal, side, outcome, mode);
 
     } else {
       // ======================================================================
-      // LIVE EXECUTION PATH
-      // TODO: This path requires real Polymarket integration
+      // LIVE EXECUTION PATH (gamma or mainnet)
       // ======================================================================
-      console.log(`${COLORS.bright}${COLORS.magenta}🔴 LIVE TRADING MODE${COLORS.reset}`);
+      console.log(`${COLORS.bright}${COLORS.magenta}🔴 LIVE TRADING MODE: ${mode.toUpperCase()}${COLORS.reset}`);
       
       // Get market data from Polymarket
     const market = await getMarketData(marketId);
@@ -309,65 +391,104 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
       throw new Error(`Token ID not found for outcome ${outcome}`);
     }
 
-    // TODO: Get current market price for limit orders
-    const price = 0.5; // Placeholder - should fetch from market
+      // Get private key for signing
+      if (!tradingConfig.privateKey) {
+        throw new Error('POLYMARKET_PRIVATE_KEY is not configured');
+      }
 
-      // Create order (requires bot key)
-    const botKey = bot.keys[0];
-    if (!botKey) {
-      throw new Error(`Bot ${botId} has no trading key configured`);
-    }
+      // Calculate price (for limit orders, we'll use mid-price or a reasonable default)
+      // In production, this should fetch from the order book
+      const price = 50; // 50 cents = $0.50, represents fair value for binary market
 
-    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET;
-    if (!encryptionSecret) {
-      throw new Error('BOT_KEY_ENCRYPTION_SECRET not configured');
-    }
+      // Convert size to token amount (sizeUsd / price)
+      // Price is in cents (0-100), so we calculate tokens based on USDC
+      const tokenSize = Math.floor((sizeUsd / (price / 100)) * 1e6).toString();
 
-      // Decrypt private key (for live trading - use with caution)
-    const privateKey = decryptPrivateKey(botKey.encryptedPrivKey, encryptionSecret);
+      // Build and sign the order
+      const orderInput: PolymarketOrderInput = {
+        tokenId,
+        side: side === 'BUY' ? PolymarketOrderSide.BUY : PolymarketOrderSide.SELL,
+        price,
+        size: tokenSize,
+        feeRateBps: 0,
+      };
 
-    const order = await createOrder(tokenId, side, price, sizeUsd, privateKey);
-    if (!order) {
-      throw new Error('Failed to create order');
-    }
+      console.log(`${COLORS.cyan}📝 Signing order...${COLORS.reset}`);
+      console.log(`${COLORS.cyan}   Token ID:${COLORS.reset} ${tokenId}`);
+      console.log(`${COLORS.cyan}   Side:${COLORS.reset}     ${side}`);
+      console.log(`${COLORS.cyan}   Size:${COLORS.reset}     $${sizeUsd.toFixed(2)} (${tokenSize} tokens)`);
+      console.log(`${COLORS.cyan}   Price:${COLORS.reset}    ${price} cents`);
 
-    // Store order in database
+      const signedOrder = await signPolymarketOrder(orderInput, tradingConfig.privateKey);
+
+      // Store order in database first (as PENDING)
     const dbOrder = await prisma.order.create({
       data: {
           botId: bot.botId,
           marketId,
         outcome,
         side,
-        price,
+          price: price / 100, // Store as decimal
         size: sizeUsd,
         status: 'PENDING',
         tokenId,
       },
     });
 
-    // Submit order to Polymarket (if API credentials available)
-    const apiKey = process.env.POLYMARKET_API_KEY;
-    const apiSecret = process.env.POLYMARKET_API_SECRET;
-    const apiPassphrase = process.env.POLYMARKET_API_PASSPHRASE;
+      // Submit order to Polymarket
+      try {
+        const response = await submitOrderToPolymarket(signedOrder, mode);
 
-    if (apiKey && apiSecret && apiPassphrase) {
-      const orderId = await submitOrder(order, apiKey, apiSecret, apiPassphrase);
-      if (orderId) {
+        if (response.orderId && response.status !== 'CANCELED') {
+          // Update order with Polymarket order ID
+          await prisma.order.update({
+            where: { id: dbOrder.id },
+            data: {
+              orderId: response.orderId,
+              status: response.status === 'MATCHED' ? ORDER_STATUS.FILLED : ORDER_STATUS.PENDING,
+            },
+          });
+
+          logLiveOrderSubmitted(response.orderId, mode);
+
+          // If there are fills, record them
+          if (response.fills && response.fills.length > 0) {
+            for (const fill of response.fills) {
+              await prisma.fill.create({
+                data: {
+                  botId: bot.botId,
+                  orderId: dbOrder.id,
+                  price: parseFloat(fill.price),
+                  size: parseFloat(fill.size),
+                  fees: 0, // TODO: Get actual fees from response
+                  fillId: fill.fillId,
+                },
+              });
+            }
+          }
+
+          logTradeComplete(botId, signal, side, outcome, mode);
+        } else {
+          // Order failed or was rejected
+          await prisma.order.update({
+            where: { id: dbOrder.id },
+            data: { status: ORDER_STATUS.CANCELLED },
+          });
+          
+          throw new Error(`Order submission failed: ${response.errorMsg || 'Unknown error'}`);
+        }
+      } catch (submitError: any) {
+        // Update order status to cancelled on error
         await prisma.order.update({
           where: { id: dbOrder.id },
-          data: { orderId },
+          data: { status: ORDER_STATUS.CANCELLED },
         });
+        throw submitError;
       }
-    } else {
-        console.log(`${COLORS.yellow}⚠️  Polymarket API credentials not configured${COLORS.reset}`);
-        console.log(`${COLORS.dim}   Order stored but not submitted to Polymarket${COLORS.reset}`);
-      }
-
-      logTradeComplete(botId, signal, side, outcome);
     }
 
     // ========================================================================
-    // Step 7: Trigger metrics update
+    // Step 8: Trigger metrics update
     // ========================================================================
     await metricsQueue.add('update-metrics', {
       botId,

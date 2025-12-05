@@ -1,14 +1,87 @@
-import axios from 'axios';
-import { ethers } from 'ethers';
+/**
+ * Polymarket API Client
+ * 
+ * Provides HTTP client functions for interacting with Polymarket's APIs:
+ * - Gamma API: Market data and discovery
+ * - CLOB API: Order submission and management
+ * 
+ * Supports both Gamma (testnet) and mainnet modes.
+ */
+
+import axios, { AxiosError } from 'axios';
 import {
   PolymarketMarket,
-  PolymarketOrder,
   OrderSide,
   Outcome,
 } from '@botmarket/shared';
+import { SignedPolymarketOrder } from './polymarketSigning';
+import { TradingMode, getTradingConfig } from './tradingConfig';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/**
+ * Response from Polymarket CLOB order submission.
+ */
+export interface PolymarketOrderResponse {
+  /** Order ID assigned by Polymarket */
+  orderId: string;
+  /** Order status */
+  status: 'LIVE' | 'MATCHED' | 'CANCELED' | 'EXPIRED';
+  /** Transaction hash if matched on-chain */
+  transactionsHashes?: string[];
+  /** Fill information if order was matched */
+  fills?: {
+    fillId: string;
+    price: string;
+    size: string;
+    timestamp: string;
+  }[];
+  /** Error message if submission failed */
+  errorMsg?: string;
+}
+
+/**
+ * Error response from Polymarket API.
+ */
+export interface PolymarketApiError {
+  error: string;
+  message?: string;
+  code?: string;
+}
+
+// ============================================================================
+// Constants
+// ============================================================================
 
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || 'https://gamma-api.polymarket.com';
 const CLOB_API = process.env.POLYMARKET_CLOB_API || 'https://clob.polymarket.com';
+
+/** Request timeout in milliseconds */
+const REQUEST_TIMEOUT = 15000;
+
+/** Maximum retries for transient failures */
+const MAX_RETRIES = 2;
+
+// ============================================================================
+// Console Colors
+// ============================================================================
+
+const COLORS = {
+  reset: '\x1b[0m',
+  bright: '\x1b[1m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+};
+
+// ============================================================================
+// Market Data Functions (Gamma API)
+// ============================================================================
 
 /**
  * Get market data from Polymarket Gamma API
@@ -16,7 +89,7 @@ const CLOB_API = process.env.POLYMARKET_CLOB_API || 'https://clob.polymarket.com
 export async function getMarketData(marketId: string): Promise<PolymarketMarket | null> {
   try {
     const response = await axios.get(`${GAMMA_API}/markets/${marketId}`, {
-      timeout: 10000,
+      timeout: REQUEST_TIMEOUT,
     });
 
     if (response.status === 200) {
@@ -99,9 +172,200 @@ export function getTokenIdForOutcome(
   return market.clobTokenIds[outcomeIndex];
 }
 
+// ============================================================================
+// Order Submission Functions (CLOB API)
+// ============================================================================
+
 /**
- * Create and sign a Polymarket order
- * TODO: Implement full EIP-712 signing based on existing Python bot patterns
+ * Submit a signed order to Polymarket CLOB API.
+ * 
+ * This function handles:
+ * - HTTP errors and retries
+ * - Non-200 responses
+ * - Timeouts
+ * - Invalid response bodies
+ * 
+ * @param order - The signed order to submit
+ * @param mode - Trading mode ('gamma' or 'mainnet')
+ * @returns Order response with ID, status, and any fill information
+ */
+export async function submitOrderToPolymarket(
+  order: SignedPolymarketOrder,
+  mode: TradingMode
+): Promise<PolymarketOrderResponse> {
+  if (mode === 'mock') {
+    throw new Error('Cannot submit orders in mock mode');
+  }
+  
+  const config = getTradingConfig();
+  const baseUrl = config.clobApiUrl;
+  const endpoint = `${baseUrl}/order`;
+  
+  console.log(`${COLORS.cyan}📤 Submitting order to Polymarket (${mode})...${COLORS.reset}`);
+  console.log(`${COLORS.cyan}   Endpoint:${COLORS.reset} ${endpoint}`);
+  console.log(`${COLORS.cyan}   Token ID:${COLORS.reset} ${order.tokenId}`);
+  console.log(`${COLORS.cyan}   Side:${COLORS.reset} ${order.side === '0' ? 'BUY' : 'SELL'}`);
+  console.log(`${COLORS.cyan}   Maker:${COLORS.reset} ${order.maker}`);
+  
+  // Prepare the request payload
+  const payload = {
+    order: {
+      salt: order.salt,
+      maker: order.maker,
+      signer: order.signer,
+      taker: order.taker,
+      tokenId: order.tokenId,
+      makerAmount: order.makerAmount,
+      takerAmount: order.takerAmount,
+      expiration: order.expiration,
+      nonce: order.nonce,
+      feeRateBps: order.feeRateBps,
+      side: parseInt(order.side),
+      signatureType: parseInt(order.signatureType),
+      signature: order.signature,
+    },
+    // Owner is the maker address
+    owner: order.maker,
+    // Order type: GTC (Good Till Cancelled)
+    orderType: 'GTC',
+  };
+  
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await axios.post(endpoint, payload, {
+        timeout: REQUEST_TIMEOUT,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      // Check for successful response
+      if (response.status >= 200 && response.status < 300) {
+        const data = response.data;
+        
+        // Validate response structure
+        if (!data || typeof data !== 'object') {
+          throw new Error('Invalid response body from Polymarket API');
+        }
+        
+        const orderId = data.orderID || data.orderId || data.id;
+        if (!orderId) {
+          // Check for error in response
+          if (data.error || data.errorMsg) {
+            throw new Error(data.error || data.errorMsg);
+          }
+          throw new Error('No order ID in response');
+        }
+        
+        console.log(`${COLORS.green}✅ Order submitted successfully${COLORS.reset}`);
+        console.log(`${COLORS.cyan}   Order ID:${COLORS.reset} ${orderId}`);
+        console.log(`${COLORS.cyan}   Status:${COLORS.reset} ${data.status || 'LIVE'}`);
+        
+        return {
+          orderId,
+          status: data.status || 'LIVE',
+          transactionsHashes: data.transactionsHashes,
+          fills: data.fills,
+        };
+      }
+      
+      // Non-2xx response
+      throw new Error(`Polymarket API returned status ${response.status}`);
+      
+    } catch (error: any) {
+      lastError = error;
+      
+      // Handle Axios errors
+      if (axios.isAxiosError(error)) {
+        const axiosError = error as AxiosError<PolymarketApiError>;
+        
+        // Timeout
+        if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+          console.log(`${COLORS.yellow}⚠️  Request timeout (attempt ${attempt + 1}/${MAX_RETRIES + 1})${COLORS.reset}`);
+          if (attempt < MAX_RETRIES) {
+            await sleep(1000 * (attempt + 1)); // Exponential backoff
+            continue;
+          }
+          throw new Error(`Request timeout after ${MAX_RETRIES + 1} attempts`);
+        }
+        
+        // Server error (5xx) - retry
+        if (axiosError.response?.status && axiosError.response.status >= 500) {
+          console.log(`${COLORS.yellow}⚠️  Server error ${axiosError.response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1})${COLORS.reset}`);
+          if (attempt < MAX_RETRIES) {
+            await sleep(1000 * (attempt + 1));
+            continue;
+          }
+        }
+        
+        // Client error (4xx) - don't retry
+        if (axiosError.response?.status && axiosError.response.status >= 400 && axiosError.response.status < 500) {
+          const errorData = axiosError.response.data;
+          const errorMessage = errorData?.error || errorData?.message || `API error ${axiosError.response.status}`;
+          console.log(`${COLORS.red}❌ Order submission failed: ${errorMessage}${COLORS.reset}`);
+          
+          return {
+            orderId: '',
+            status: 'CANCELED',
+            errorMsg: errorMessage,
+          };
+        }
+        
+        // Network error
+        if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+          console.log(`${COLORS.red}❌ Network error: Cannot reach Polymarket API${COLORS.reset}`);
+          throw new Error('Cannot reach Polymarket API - check network connection');
+        }
+      }
+      
+      // Unknown error - don't retry
+      console.log(`${COLORS.red}❌ Order submission error: ${error.message}${COLORS.reset}`);
+      throw error;
+    }
+  }
+  
+  throw lastError || new Error('Order submission failed');
+}
+
+/**
+ * Get order status from Polymarket.
+ */
+export async function getOrderStatus(orderId: string): Promise<any> {
+  try {
+    const response = await axios.get(`${CLOB_API}/order/${orderId}`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(`Error getting order status ${orderId}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Cancel an order on Polymarket.
+ * Note: This requires proper authentication which may need to be implemented.
+ */
+export async function cancelOrder(orderId: string): Promise<boolean> {
+  try {
+    const response = await axios.delete(`${CLOB_API}/order/${orderId}`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    return response.status === 200;
+  } catch (error: any) {
+    console.error(`Error canceling order ${orderId}:`, error.message);
+    return false;
+  }
+}
+
+// ============================================================================
+// Legacy Functions (Kept for backwards compatibility)
+// ============================================================================
+
+/**
+ * @deprecated Use signPolymarketOrder from polymarketSigning.ts instead
  */
 export async function createOrder(
   tokenId: string,
@@ -109,20 +373,12 @@ export async function createOrder(
   price: number,
   size: number,
   privateKey: string
-): Promise<PolymarketOrder | null> {
+): Promise<any | null> {
+  console.warn('createOrder is deprecated. Use signPolymarketOrder from polymarketSigning.ts');
+  
   try {
-    // This is a simplified version
-    // Full implementation should use EIP-712 signing like the Python bot
-    // See: https://docs.polymarket.com/clob-on-chain
-    
     const nonce = Date.now();
-    const expiration = Math.floor(Date.now() / 1000) + 60 * 60 * 24; // 24 hours
-
-    // TODO: Implement proper order signing
-    // For MVP, we'll structure the order but actual signing requires:
-    // 1. EIP-712 domain and types
-    // 2. Order message signing
-    // 3. API key derivation (L1 signature)
+    const expiration = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
     
     return {
       tokenId,
@@ -139,43 +395,41 @@ export async function createOrder(
 }
 
 /**
- * Submit order to Polymarket CLOB API
- * TODO: Implement full API integration with authentication
+ * @deprecated Use submitOrderToPolymarket instead
  */
 export async function submitOrder(
-  order: PolymarketOrder,
+  order: any,
   apiKey: string,
   apiSecret: string,
   apiPassphrase: string
 ): Promise<string | null> {
-  try {
-    // TODO: Implement full CLOB API integration
-    // This requires:
-    // 1. API authentication (signature-based)
-    // 2. Proper headers (POLY_ADDRESS, etc.)
-    // 3. Order submission endpoint
-    
-    console.log('Order submission not fully implemented - requires API credentials');
-    return null;
-  } catch (error: any) {
-    console.error('Error submitting order:', error);
-    return null;
-  }
+  console.warn('submitOrder is deprecated. Use submitOrderToPolymarket instead');
+  console.log('Order submission not fully implemented - requires proper EIP-712 signing');
+  return null;
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+/**
+ * Sleep for a specified number of milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * Get order status from Polymarket
+ * Check if the Polymarket API is reachable.
  */
-export async function getOrderStatus(orderId: string): Promise<any> {
+export async function checkApiHealth(): Promise<boolean> {
   try {
-    // TODO: Implement order status checking
-    const response = await axios.get(`${CLOB_API}/orders/${orderId}`, {
-      timeout: 10000,
+    const response = await axios.get(`${GAMMA_API}/markets`, {
+      timeout: 5000,
+      params: { limit: 1 },
     });
-    return response.data;
-  } catch (error: any) {
-    console.error(`Error getting order status ${orderId}:`, error);
-    return null;
+    return response.status === 200;
+  } catch {
+    return false;
   }
 }
-
