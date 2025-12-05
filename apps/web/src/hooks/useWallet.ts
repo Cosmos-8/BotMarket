@@ -20,7 +20,7 @@ export interface WalletState {
   isDisconnected: boolean;
   /** Current chain ID */
   chainId: number | undefined;
-  /** Whether we're on the correct chain (Base Sepolia) */
+  /** Whether we're on the correct chain (Base) */
   isCorrectChain: boolean;
   /** Shortened address for display (e.g., "0x1234...abcd") */
   shortAddress: string | undefined;

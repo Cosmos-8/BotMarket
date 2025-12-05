@@ -2,6 +2,47 @@ import crypto from 'crypto';
 import { WebhookPayload, ParsedSignal } from './schemas';
 import { SIGNAL_TYPES } from './constants';
 
+// ============================================================================
+// Proxy Wallet Generation
+// ============================================================================
+
+export interface GeneratedWallet {
+  address: string;
+  privateKey: string;
+}
+
+/**
+ * Generate a new Polygon-compatible wallet for a bot.
+ * This creates a dedicated "proxy wallet" that the bot uses for trading.
+ * 
+ * @returns Object containing the wallet address and private key
+ */
+export function generateProxyWallet(): GeneratedWallet {
+  // Generate 32 random bytes for the private key
+  const privateKeyBytes = crypto.randomBytes(32);
+  const privateKey = '0x' + privateKeyBytes.toString('hex');
+  
+  // Derive address from private key using keccak256
+  // For a proper implementation, we'd use ethers.js, but for MVP we'll 
+  // return the private key and let the caller derive the address
+  // The address will be derived when we use the key with ethers
+  
+  return {
+    address: '', // Will be derived by ethers when used
+    privateKey,
+  };
+}
+
+/**
+ * Derive wallet address from private key using ethers-compatible approach.
+ * Note: This is a placeholder - actual derivation happens in the API with ethers.
+ */
+export function deriveAddressFromKey(privateKey: string): string {
+  // This will be implemented in the API where ethers is available
+  // For now, return empty - the API will derive it
+  return '';
+}
+
 /**
  * Parse webhook payload into standardized signal format
  * Supports multiple formats like the existing Python bot

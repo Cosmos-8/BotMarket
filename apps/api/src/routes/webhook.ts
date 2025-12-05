@@ -72,7 +72,7 @@ router.post('/:botId', async (req: Request, res: Response) => {
     const payloadHash = hashPayload(payload);
     await prisma.signal.create({
       data: {
-        botId: bot.id,
+        botId: bot.botId, // Use external botId, not internal id
         payloadHash,
         parsedSignalJSON: parsedSignal as any,
         signalType: parsedSignal.signalType,

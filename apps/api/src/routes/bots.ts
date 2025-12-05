@@ -8,8 +8,9 @@ import {
   CreateBotRequestSchema,
   ForkBotRequestSchema,
   calculateConfigHash,
+  encryptPrivateKey,
 } from '@botmarket/shared';
-import { getAddress } from 'ethers';
+import { getAddress, Wallet } from 'ethers';
 
 const router: IRouter = Router();
 
@@ -71,7 +72,16 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       update: {},
     });
 
-    // Create bot
+    // Generate a proxy wallet for this bot (Polygon-compatible)
+    const proxyWallet = Wallet.createRandom();
+    const proxyAddress = proxyWallet.address;
+    const proxyPrivateKey = proxyWallet.privateKey;
+
+    // Encrypt the private key for storage
+    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+    const encryptedKey = encryptPrivateKey(proxyPrivateKey, encryptionSecret);
+
+    // Create bot with proxy wallet
     const bot = await prisma.bot.create({
       data: {
         botId,
@@ -85,16 +95,26 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
             version: config.version,
           },
         },
+        // Store the encrypted proxy wallet key
+        keys: {
+          create: {
+            encryptedPrivKey: encryptedKey,
+            keyVersion: '1.0',
+          },
+        },
       },
       include: {
         configs: {
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
+        keys: {
+          take: 1,
+        },
       },
     });
 
-    // TODO: Emit BotCreated event on Base contract
+    console.log(`🔐 Generated proxy wallet for bot ${botId}: ${proxyAddress}`);
 
     res.json({
       success: true,
@@ -104,6 +124,12 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         visibility: bot.visibility,
         configHash: bot.configHash,
         createdAt: bot.createdAt,
+        // Return proxy wallet address so user can fund it
+        proxyWallet: {
+          address: proxyAddress,
+          network: 'Polygon',
+          note: 'Fund this wallet with USDC and MATIC to enable live trading',
+        },
       },
     });
   } catch (error: any) {
@@ -219,6 +245,9 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
+        keys: {
+          take: 1,
+        },
         metrics: true,
         orders: {
           orderBy: { placedAt: 'desc' },
@@ -237,6 +266,20 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
+    // Derive proxy wallet address if bot has a key
+    let proxyWalletAddress: string | null = null;
+    if (bot.keys && bot.keys.length > 0) {
+      try {
+        const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+        const { decryptPrivateKey } = await import('@botmarket/shared');
+        const privateKey = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+        const wallet = new Wallet(privateKey);
+        proxyWalletAddress = wallet.address;
+      } catch (err) {
+        console.error('Failed to derive proxy wallet address:', err);
+      }
+    }
+
     res.json({
       success: true,
       data: {
@@ -251,6 +294,12 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
         recentOrders: bot.orders,
         forkCount: bot._count.forkedBots,
         createdAt: bot.createdAt,
+        // Proxy wallet for live trading
+        proxyWallet: proxyWalletAddress ? {
+          address: proxyWalletAddress,
+          network: 'Polygon',
+          note: 'Fund this wallet with USDC and MATIC to enable live trading',
+        } : null,
       },
     });
   } catch (error: any) {
@@ -340,6 +389,121 @@ router.post('/:id/fork', verifyWallet, async (req: AuthenticatedRequest, res: Re
     res.status(400).json({
       success: false,
       error: error.message || 'Failed to fork bot',
+    });
+  }
+});
+
+/**
+ * DELETE /bots/:id
+ * Delete a bot and all its related data
+ */
+router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // Check if bot exists
+    const bot = await prisma.bot.findUnique({
+      where: { botId: id },
+    });
+
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found',
+      });
+    }
+
+    // Delete all related data in order (due to foreign key constraints)
+    // 1. Delete fills
+    await prisma.fill.deleteMany({
+      where: { botId: id },
+    });
+
+    // 2. Delete orders
+    await prisma.order.deleteMany({
+      where: { botId: id },
+    });
+
+    // 3. Delete signals
+    await prisma.signal.deleteMany({
+      where: { botId: id },
+    });
+
+    // 4. Delete metrics
+    await prisma.botMetrics.deleteMany({
+      where: { botId: id },
+    });
+
+    // 5. Delete configs
+    await prisma.botConfig.deleteMany({
+      where: { botId: bot.id },
+    });
+
+    // 6. Delete bot keys
+    await prisma.botKey.deleteMany({
+      where: { botId: bot.id },
+    });
+
+    // 7. Finally delete the bot
+    await prisma.bot.delete({
+      where: { botId: id },
+    });
+
+    res.json({
+      success: true,
+      message: 'Bot deleted successfully',
+    });
+  } catch (error: any) {
+    console.error('Error deleting bot:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to delete bot',
+    });
+  }
+});
+
+/**
+ * GET /bots/:id/signals
+ * Get signals for a bot
+ */
+router.get('/:id/signals', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+
+    // Check if bot exists
+    const bot = await prisma.bot.findUnique({
+      where: { botId: id },
+    });
+
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found',
+      });
+    }
+
+    // Fetch signals
+    const signals = await prisma.signal.findMany({
+      where: { botId: id },
+      orderBy: { receivedAt: 'desc' },
+      take: limit,
+    });
+
+    res.json({
+      success: true,
+      data: signals.map(signal => ({
+        id: signal.id,
+        signalType: signal.signalType,
+        receivedAt: signal.receivedAt,
+        parsedSignal: signal.parsedSignalJSON,
+      })),
+    });
+  } catch (error: any) {
+    console.error('Error fetching signals:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch signals',
     });
   }
 });

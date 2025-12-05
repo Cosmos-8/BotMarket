@@ -2,9 +2,47 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getBot, sendTestSignal } from '@/lib/api';
+import { getBot, sendTestSignal, deleteBot, getBotSignals, getBalance, allocateToBot, getBotBalance } from '@/lib/api';
+import { useAccount } from 'wagmi';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+// Webhook URL for TradingView (can be ngrok URL for public access)
+const WEBHOOK_BASE_URL = process.env.NEXT_PUBLIC_WEBHOOK_BASE_URL || API_URL;
+
+// ============================================================================
+// Live Market Data Types & Fetching
+// ============================================================================
+
+interface LiveMarketData {
+  question: string;
+  yesPrice: number;
+  noPrice: number;
+  lastUpdated: string;
+  marketId: string | null;
+  conditionId: string | null;
+  volume24h: number;
+  liquidity: number;
+  endDate: string | null;
+  active: boolean;
+  source: 'live' | 'demo';
+}
+
+async function fetchLiveMarketData(botId: string): Promise<LiveMarketData | null> {
+  try {
+    const response = await fetch(`${API_URL}/polymarket/market/${botId}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const result = await response.json();
+    if (result.success && result.data) {
+      return result.data;
+    }
+    return null;
+  } catch (error) {
+    console.error('[LiveMarket] Failed to fetch market data:', error);
+    return null;
+  }
+}
 
 // ============================================================================
 // Types
@@ -58,6 +96,12 @@ interface Order {
   tokenId: string;
 }
 
+interface ProxyWallet {
+  address: string;
+  network: string;
+  note: string;
+}
+
 interface Bot {
   botId: string;
   creator: string;
@@ -67,6 +111,7 @@ interface Bot {
   recentOrders?: Order[];
   forkCount?: number;
   createdAt: string;
+  proxyWallet?: ProxyWallet | null;
 }
 
 type SignalType = 'LONG' | 'SHORT' | 'CLOSE';
@@ -92,6 +137,248 @@ function MetricCard({ icon, label, value, valueColor = 'text-white', subValue }:
       </div>
       <p className={`text-2xl font-bold ${valueColor}`}>{value}</p>
       {subValue && <p className="text-xs text-zinc-500 mt-1">{subValue}</p>}
+    </div>
+  );
+}
+
+// Bot Funding Panel Component
+interface BotFundingPanelProps {
+  proxyWallet: ProxyWallet;
+  botId: string;
+  userAddress: string | undefined;
+  onFundSuccess: () => void;
+}
+
+function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: BotFundingPanelProps) {
+  const [userPoolBalance, setUserPoolBalance] = useState<number>(0);
+  const [botAllocatedBalance, setBotAllocatedBalance] = useState<number>(0);
+  const [allocateAmount, setAllocateAmount] = useState<string>('10');
+  const [isAllocating, setIsAllocating] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // Load user's pool balance and bot's allocated balance
+  useEffect(() => {
+    async function loadBalances() {
+      if (!userAddress) return;
+      
+      try {
+        // Get user's main pool balance
+        const balanceResult = await getBalance(userAddress);
+        if (balanceResult.success) {
+          setUserPoolBalance(balanceResult.data.usdcBalance || 0);
+        }
+        
+        // Get bot's allocated balance
+        const botBalanceResult = await getBotBalance(botId);
+        if (botBalanceResult.success) {
+          setBotAllocatedBalance(botBalanceResult.data.allocatedBalance || 0);
+        }
+      } catch (err) {
+        console.error('Error loading balances:', err);
+      }
+    }
+    
+    loadBalances();
+  }, [userAddress, botId]);
+
+  const handleAllocate = async () => {
+    if (!userAddress) {
+      setError('Please connect your wallet first');
+      return;
+    }
+
+    const amount = parseFloat(allocateAmount);
+    if (isNaN(amount) || amount <= 0) {
+      setError('Please enter a valid amount');
+      return;
+    }
+
+    if (amount > userPoolBalance) {
+      setError(`Insufficient balance. You have $${userPoolBalance.toFixed(2)} in your pool.`);
+      return;
+    }
+
+    setIsAllocating(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const result = await allocateToBot(userAddress, botId, amount);
+      if (result.success) {
+        setSuccess(`Allocated $${amount.toFixed(2)} to this bot!`);
+        setUserPoolBalance(result.data.userBalance);
+        setBotAllocatedBalance(prev => prev + amount);
+        setAllocateAmount('');
+        onFundSuccess();
+      } else {
+        setError(result.error || 'Failed to allocate funds');
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || err.message || 'Failed to allocate funds');
+    } finally {
+      setIsAllocating(false);
+    }
+  };
+
+  const copyAddress = () => {
+    navigator.clipboard.writeText(proxyWallet.address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const shortAddress = `${proxyWallet.address.slice(0, 6)}...${proxyWallet.address.slice(-4)}`;
+
+  return (
+    <div className="bg-gradient-to-br from-emerald-500/10 to-purple-500/10 border border-emerald-500/20 rounded-xl p-5">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-2">
+          <span className="text-2xl">💰</span>
+          <div>
+            <h3 className="text-sm font-medium text-white">Fund This Bot</h3>
+            <p className="text-xs text-zinc-400">Allocate USDC from your pool</p>
+          </div>
+        </div>
+        <span className="px-2 py-1 bg-emerald-500/20 text-emerald-400 text-xs rounded-full">
+          Polygon
+        </span>
+      </div>
+
+      {/* Balance Overview */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="bg-dark-700/60 rounded-lg p-3">
+          <p className="text-xs text-zinc-500 mb-1">Your Pool Balance</p>
+          <p className="text-lg font-bold text-white">${userPoolBalance.toFixed(2)}</p>
+          <p className="text-[10px] text-zinc-500">Available to allocate</p>
+        </div>
+        <div className="bg-dark-700/60 rounded-lg p-3">
+          <p className="text-xs text-zinc-500 mb-1">Bot Allocated</p>
+          <p className="text-lg font-bold text-emerald-400">${botAllocatedBalance.toFixed(2)}</p>
+          <p className="text-[10px] text-zinc-500">Ready to trade</p>
+        </div>
+      </div>
+
+      {/* Allocation Input */}
+      {userAddress ? (
+        <div className="space-y-3">
+          <div className="flex space-x-2">
+            <div className="flex-1 relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">$</span>
+              <input
+                type="number"
+                value={allocateAmount}
+                onChange={(e) => setAllocateAmount(e.target.value)}
+                placeholder="Amount"
+                className="w-full pl-7 pr-4 py-3 bg-dark-600 border border-white/10 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50"
+              />
+            </div>
+            <button
+              onClick={handleAllocate}
+              disabled={isAllocating || userPoolBalance === 0}
+              className="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+            >
+              {isAllocating ? (
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <>
+                  <span>📤</span>
+                  <span>Allocate</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Quick amounts */}
+          <div className="flex space-x-2">
+            {[5, 10, 25, 50].map((amt) => (
+              <button
+                key={amt}
+                onClick={() => setAllocateAmount(amt.toString())}
+                disabled={amt > userPoolBalance}
+                className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                ${amt}
+              </button>
+            ))}
+            <button
+              onClick={() => setAllocateAmount(userPoolBalance.toString())}
+              disabled={userPoolBalance === 0}
+              className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              Max
+            </button>
+          </div>
+
+          {/* Error/Success Messages */}
+          {error && (
+            <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-400">
+              {success}
+            </div>
+          )}
+
+          {/* No balance warning */}
+          {userPoolBalance === 0 && (
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+              <p className="text-xs text-amber-400 mb-1">💡 Your pool is empty</p>
+              <p className="text-[10px] text-zinc-400">
+                Add funds to your main pool first via the CCTP bridge on the home page, then allocate to bots.
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="p-4 bg-dark-700/60 rounded-lg text-center">
+          <p className="text-sm text-zinc-400">Connect your wallet to allocate funds</p>
+        </div>
+      )}
+
+      {/* Advanced: Direct Deposit (collapsed by default) */}
+      <div className="mt-4 pt-4 border-t border-white/10">
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="text-xs text-zinc-500 hover:text-zinc-300 transition flex items-center space-x-1"
+        >
+          <span>{showAdvanced ? '▼' : '▶'}</span>
+          <span>Advanced: Direct Deposit to Bot Wallet</span>
+        </button>
+        
+        {showAdvanced && (
+          <div className="mt-3 p-3 bg-dark-700/60 rounded-lg space-y-2">
+            <p className="text-[10px] text-zinc-500">
+              For advanced users: Send USDC directly to this bot&apos;s wallet on Polygon
+            </p>
+            <div className="flex items-center justify-between bg-dark-600 rounded-lg p-2">
+              <code className="text-xs text-emerald-300 font-mono">{shortAddress}</code>
+              <button
+                onClick={copyAddress}
+                className="px-2 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-[10px] rounded transition"
+              >
+                {copied ? '✓' : 'Copy'}
+              </button>
+            </div>
+            <a
+              href={`https://polygonscan.com/address/${proxyWallet.address}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center text-[10px] text-purple-400 hover:text-purple-300 transition"
+            >
+              View on PolygonScan ↗
+            </a>
+          </div>
+        )}
+      </div>
+
+      <p className="mt-3 text-[10px] text-zinc-500 text-center">
+        Each bot has its own isolated wallet for fund management
+      </p>
     </div>
   );
 }
@@ -160,12 +447,184 @@ function Toast({ message, type, onClose }: ToastProps) {
 }
 
 // ============================================================================
+// Live Market Card Component
+// ============================================================================
+
+interface LiveMarketCardProps {
+  marketData: LiveMarketData | null;
+  isLoading: boolean;
+  isError: boolean;
+}
+
+function LiveMarketCard({ marketData, isLoading, isError }: LiveMarketCardProps) {
+  // Format relative time
+  function formatRelativeTime(isoString: string): string {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    
+    if (diffSec < 60) return 'Just now';
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} min ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} hr ago`;
+    return date.toLocaleDateString();
+  }
+
+  // Format end date
+  function formatEndDate(isoString: string | null): string {
+    if (!isoString) return 'TBD';
+    const date = new Date(isoString);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="bg-dark-700 border border-white/5 rounded-xl p-6 mb-8">
+        <div className="flex items-center space-x-2 mb-4">
+          <span className="text-lg">📊</span>
+          <span className="text-lg font-semibold text-white">Live Polymarket Market</span>
+        </div>
+        <div className="animate-pulse">
+          <div className="h-4 bg-dark-600 rounded w-3/4 mb-4"></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="h-16 bg-dark-600 rounded"></div>
+            <div className="h-16 bg-dark-600 rounded"></div>
+          </div>
+        </div>
+        <p className="text-xs text-zinc-500 mt-4 text-center">
+          Fetching live market data…
+        </p>
+      </div>
+    );
+  }
+
+  // Error state
+  if (isError || !marketData) {
+    return (
+      <div className="bg-dark-700 border border-amber-500/20 rounded-xl p-6 mb-8">
+        <div className="flex items-center space-x-2 mb-2">
+          <span className="text-lg">📊</span>
+          <span className="text-lg font-semibold text-white">Live Polymarket Market</span>
+        </div>
+        <div className="flex items-center space-x-2 text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2">
+          <span>⚠️</span>
+          <span className="text-sm">Unable to load live Polymarket data. Demo will continue with cached metrics.</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Success state with market data
+  return (
+    <div className="bg-dark-700 border border-white/5 rounded-xl p-6 mb-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-2">
+          <span className="text-lg">📊</span>
+          <span className="text-lg font-semibold text-white">Live Polymarket Market</span>
+          {marketData.source === 'live' ? (
+            <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 text-xs font-medium rounded-full border border-emerald-500/20">
+              LIVE
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 bg-amber-500/10 text-amber-400 text-xs font-medium rounded-full border border-amber-500/20">
+              DEMO
+            </span>
+          )}
+        </div>
+        <span className="text-xs text-zinc-500">
+          Updated {formatRelativeTime(marketData.lastUpdated)}
+        </span>
+      </div>
+      
+      {/* Subtitle */}
+      <p className="text-xs text-zinc-500 mb-4">
+        Fetched in real-time via Polymarket&apos;s Gamma API
+      </p>
+
+      {/* Market Question */}
+      <div className="bg-dark-600 rounded-lg p-4 mb-4">
+        <p className="text-sm text-zinc-300 font-medium leading-relaxed">
+          {marketData.question}
+        </p>
+        {marketData.endDate && (
+          <p className="text-xs text-zinc-500 mt-2">
+            Resolves: {formatEndDate(marketData.endDate)}
+          </p>
+        )}
+      </div>
+
+      {/* YES/NO Prices */}
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4 text-center">
+          <p className="text-xs text-emerald-400 uppercase tracking-wide mb-1">YES</p>
+          <p className="text-3xl font-bold text-emerald-400">{marketData.yesPrice}%</p>
+          <p className="text-xs text-emerald-400/60 mt-1">
+            ${((marketData.yesPrice / 100) * 1).toFixed(2)} per share
+          </p>
+        </div>
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 text-center">
+          <p className="text-xs text-red-400 uppercase tracking-wide mb-1">NO</p>
+          <p className="text-3xl font-bold text-red-400">{marketData.noPrice}%</p>
+          <p className="text-xs text-red-400/60 mt-1">
+            ${((marketData.noPrice / 100) * 1).toFixed(2)} per share
+          </p>
+        </div>
+      </div>
+
+      {/* Market Stats */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-dark-600 rounded-lg p-3 text-center">
+          <p className="text-xs text-zinc-500 mb-1">24h Volume</p>
+          <p className="text-sm font-medium text-white">
+            ${marketData.volume24h >= 1000 
+              ? `${(marketData.volume24h / 1000).toFixed(1)}k` 
+              : marketData.volume24h.toFixed(0)}
+          </p>
+        </div>
+        <div className="bg-dark-600 rounded-lg p-3 text-center">
+          <p className="text-xs text-zinc-500 mb-1">Liquidity</p>
+          <p className="text-sm font-medium text-white">
+            ${marketData.liquidity >= 1000 
+              ? `${(marketData.liquidity / 1000).toFixed(1)}k` 
+              : marketData.liquidity.toFixed(0)}
+          </p>
+        </div>
+        <div className="bg-dark-600 rounded-lg p-3 text-center">
+          <p className="text-xs text-zinc-500 mb-1">Status</p>
+          <p className={`text-sm font-medium ${marketData.active ? 'text-emerald-400' : 'text-zinc-400'}`}>
+            {marketData.active ? '● Active' : '○ Closed'}
+          </p>
+        </div>
+      </div>
+
+      {/* Market ID (if available) */}
+      {marketData.marketId && (
+        <div className="mt-4 pt-4 border-t border-white/5">
+          <p className="text-xs text-zinc-500">
+            Market ID: <span className="font-mono text-zinc-400">{marketData.marketId.slice(0, 12)}...</span>
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 
 export default function BotDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { address: userAddress } = useAccount();
   const botId = params.id as string;
   
   const [bot, setBot] = useState<Bot | null>(null);
@@ -175,6 +634,15 @@ export default function BotDetailPage() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [signalHistory, setSignalHistory] = useState<Array<{ signal: SignalType; time: Date; status: string }>>([]);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  
+  // Live market data state
+  const [marketData, setMarketData] = useState<LiveMarketData | null>(null);
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [marketError, setMarketError] = useState(false);
+  
+  // Delete bot state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Load bot data
   const loadBot = useCallback(async (showLoading = true) => {
@@ -192,18 +660,68 @@ export default function BotDetailPage() {
     }
   }, [botId]);
 
+  // Load signals from API
+  const loadSignals = useCallback(async () => {
+    try {
+      const result = await getBotSignals(botId, 20);
+      if (result.success && result.data) {
+        const apiSignals = result.data.map((s: any) => ({
+          signal: s.signalType as SignalType,
+          time: new Date(s.receivedAt),
+          status: 'processed',
+        }));
+        setSignalHistory(apiSignals);
+      }
+    } catch (error) {
+      console.error('Error loading signals:', error);
+    }
+  }, [botId]);
+
   // Initial load
   useEffect(() => {
     loadBot();
-  }, [loadBot]);
+    loadSignals();
+  }, [loadBot, loadSignals]);
 
   // Polling for auto-refresh every 5 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       loadBot(false); // Silent refresh
+      loadSignals(); // Also refresh signals
     }, 5000);
     return () => clearInterval(interval);
-  }, [loadBot]);
+  }, [loadBot, loadSignals]);
+
+  // Load live market data
+  const loadMarketData = useCallback(async () => {
+    setMarketLoading(true);
+    setMarketError(false);
+    try {
+      const data = await fetchLiveMarketData(botId);
+      if (data) {
+        setMarketData(data);
+      } else {
+        setMarketError(true);
+      }
+    } catch {
+      setMarketError(true);
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [botId]);
+
+  // Initial market data load
+  useEffect(() => {
+    loadMarketData();
+  }, [loadMarketData]);
+
+  // Refresh market data every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadMarketData();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadMarketData]);
 
   // Handle sending test signal
   const handleSendSignal = async (signal: SignalType) => {
@@ -221,8 +739,11 @@ export default function BotDetailPage() {
       
       setToast({ message: `${signal} signal sent successfully!`, type: 'success' });
       
-      // Refresh bot data after a short delay to allow processing
-      setTimeout(() => loadBot(false), 1000);
+      // Refresh bot data and signals after a short delay to allow processing
+      setTimeout(() => {
+        loadBot(false);
+        loadSignals();
+      }, 1000);
     } catch (error: any) {
       setToast({ 
         message: error.response?.data?.error || error.message || 'Failed to send signal', 
@@ -236,9 +757,28 @@ export default function BotDetailPage() {
 
   // Copy webhook URL to clipboard
   const copyWebhookUrl = () => {
-    const url = `${API_URL}/webhook/${botId}`;
+    const url = `${WEBHOOK_BASE_URL}/webhook/${botId}`;
     navigator.clipboard.writeText(url);
     setToast({ message: 'Webhook URL copied!', type: 'success' });
+  };
+
+  // Handle delete bot
+  const handleDeleteBot = async () => {
+    try {
+      setDeleting(true);
+      await deleteBot(botId);
+      setToast({ message: 'Bot deleted successfully!', type: 'success' });
+      // Redirect to marketplace after deletion
+      setTimeout(() => router.push('/marketplace'), 1000);
+    } catch (error: any) {
+      setToast({
+        message: error.response?.data?.error || 'Failed to delete bot',
+        type: 'error',
+      });
+      setShowDeleteConfirm(false);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (loading) {
@@ -324,6 +864,18 @@ export default function BotDetailPage() {
           </div>
         </div>
 
+        {/* Bot Funding Section */}
+        {bot.proxyWallet && (
+          <div className="mb-8">
+            <BotFundingPanel 
+              proxyWallet={bot.proxyWallet} 
+              botId={bot.botId}
+              userAddress={userAddress}
+              onFundSuccess={() => loadBot(false)}
+            />
+          </div>
+        )}
+
         {/* Performance Summary Section */}
         <div className="mb-8">
           <h2 className="text-lg font-semibold text-white mb-4 flex items-center space-x-2">
@@ -359,6 +911,13 @@ export default function BotDetailPage() {
             />
           </div>
         </div>
+
+        {/* Live Polymarket Market Section */}
+        <LiveMarketCard 
+          marketData={marketData}
+          isLoading={marketLoading}
+          isError={marketError}
+        />
 
         {/* Main Grid */}
         <div className="grid lg:grid-cols-3 gap-6 mb-8">
@@ -586,7 +1145,7 @@ export default function BotDetailPage() {
               </p>
               <div className="bg-dark-600 rounded-lg p-3 mb-3">
                 <p className="text-xs font-mono text-zinc-300 break-all">
-                  {API_URL}/webhook/{botId}
+                  {WEBHOOK_BASE_URL}/webhook/{botId}
                 </p>
               </div>
               <button
@@ -629,10 +1188,52 @@ export default function BotDetailPage() {
               </div>
                 )}
               </div>
+              
+              {/* Delete Bot Button */}
+              <div className="mt-6 pt-4 border-t border-white/5">
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="w-full px-4 py-2 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg hover:bg-red-500/20 transition-colors text-sm font-medium"
+                >
+                  🗑️ Delete Bot
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-dark-700 border border-white/10 rounded-xl p-6 max-w-md mx-4">
+            <h3 className="text-lg font-semibold text-white mb-2">Delete Bot?</h3>
+            <p className="text-sm text-zinc-400 mb-4">
+              This will permanently delete <span className="text-white font-mono">{botId}</span> and all its trade history, signals, and metrics. This action cannot be undone.
+            </p>
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 bg-dark-600 text-white rounded-lg hover:bg-dark-500 transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteBot}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm font-medium disabled:opacity-50 flex items-center justify-center"
+              >
+                {deleting ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  '🗑️ Delete'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast Notification */}
       {toast && (

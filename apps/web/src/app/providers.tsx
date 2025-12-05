@@ -3,35 +3,53 @@
 /**
  * Web3 Providers
  * 
- * Configures wagmi + RainbowKit for Base Sepolia.
+ * Configures wagmi + RainbowKit for Base Mainnet.
  * Wraps the entire app to provide wallet connection functionality.
  */
 
 import { ReactNode } from 'react';
-import { WagmiProvider, createConfig, http } from 'wagmi';
-import { baseSepolia } from 'wagmi/chains';
+import { WagmiProvider } from 'wagmi';
+import { base } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   RainbowKitProvider,
   getDefaultConfig,
   darkTheme,
 } from '@rainbow-me/rainbowkit';
+import {
+  phantomWallet,
+  metaMaskWallet,
+  coinbaseWallet,
+  walletConnectWallet,
+  rainbowWallet,
+} from '@rainbow-me/rainbowkit/wallets';
 import '@rainbow-me/rainbowkit/styles.css';
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-// WalletConnect Project ID - get one at https://cloud.walletconnect.com
-// For hackathon demo, we use a placeholder that works with injected wallets
-const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'demo-project-id';
+// WalletConnect Project ID - get one free at https://cloud.walletconnect.com
+const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'demo';
 
-// Configure wagmi with RainbowKit defaults
+// Configure wagmi with custom wallets including Phantom
 const config = getDefaultConfig({
   appName: 'BotMarket',
   projectId: WALLETCONNECT_PROJECT_ID,
-  chains: [baseSepolia],
-  ssr: true, // Required for Next.js App Router
+  chains: [base],
+  ssr: true,
+  wallets: [
+    {
+      groupName: 'Popular',
+      wallets: [
+        phantomWallet,
+        metaMaskWallet,
+        coinbaseWallet,
+        rainbowWallet,
+        walletConnectWallet,
+      ],
+    },
+  ],
 });
 
 // Create React Query client

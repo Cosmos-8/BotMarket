@@ -202,7 +202,59 @@ export function validateLiveTradingConfig(config: TradingConfig): string | null 
     return 'POLYMARKET_PRIVATE_KEY appears to be invalid (too short)';
   }
   
+  if (!config.walletAddress) {
+    return 'POLYMARKET_WALLET_ADDRESS is required for live trading';
+  }
+  
   return null;
+}
+
+/**
+ * Print a red error banner and exit if required env vars are missing for live modes.
+ * Call this at startup before initializing the worker.
+ */
+export function validateRequiredEnvOrExit(): void {
+  const mode = parseTradingMode();
+  
+  if (mode === 'mock') {
+    return; // Mock mode doesn't require additional env vars
+  }
+  
+  const missing: string[] = [];
+  
+  if (!process.env.POLYMARKET_PRIVATE_KEY) {
+    missing.push('POLYMARKET_PRIVATE_KEY');
+  }
+  
+  if (!process.env.POLYMARKET_WALLET_ADDRESS) {
+    missing.push('POLYMARKET_WALLET_ADDRESS');
+  }
+  
+  if (!process.env.MAX_TRADE_SIZE_USD) {
+    missing.push('MAX_TRADE_SIZE_USD');
+  }
+  
+  if (!process.env.MAX_DAILY_NOTIONAL_USD) {
+    missing.push('MAX_DAILY_NOTIONAL_USD');
+  }
+  
+  if (missing.length > 0) {
+    console.log('');
+    console.log(`${COLORS.red}╔════════════════════════════════════════════════════════════════════╗${COLORS.reset}`);
+    console.log(`${COLORS.red}║${COLORS.reset}  ${COLORS.bright}${COLORS.red}❌ FATAL: MISSING REQUIRED ENVIRONMENT VARIABLES${COLORS.reset}                 ${COLORS.red}║${COLORS.reset}`);
+    console.log(`${COLORS.red}╠════════════════════════════════════════════════════════════════════╣${COLORS.reset}`);
+    console.log(`${COLORS.red}║${COLORS.reset}  TRADING_MODE is set to "${COLORS.bright}${mode}${COLORS.reset}" which requires:                ${COLORS.red}║${COLORS.reset}`);
+    for (const varName of missing) {
+      console.log(`${COLORS.red}║${COLORS.reset}    ${COLORS.yellow}• ${varName}${COLORS.reset}                                                  ${COLORS.red}║${COLORS.reset}`);
+    }
+    console.log(`${COLORS.red}╠════════════════════════════════════════════════════════════════════╣${COLORS.reset}`);
+    console.log(`${COLORS.red}║${COLORS.reset}  ${COLORS.cyan}Either set these variables or use TRADING_MODE=mock${COLORS.reset}              ${COLORS.red}║${COLORS.reset}`);
+    console.log(`${COLORS.red}╚════════════════════════════════════════════════════════════════════╝${COLORS.reset}`);
+    console.log('');
+    console.log(`${COLORS.red}Worker refusing to start. Fix configuration and try again.${COLORS.reset}`);
+    console.log('');
+    process.exit(1);
+  }
 }
 
 // ============================================================================

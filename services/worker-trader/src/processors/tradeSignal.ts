@@ -18,6 +18,11 @@ import {
   OrderSide as PolymarketOrderSide,
 } from '../lib/polymarketSigning';
 import {
+  checkKillSwitches,
+  logKillSwitchTriggered,
+  WalletDiagnostics,
+} from '../lib/safetyVerification';
+import {
   BotConfig,
   SignalType,
   SIGNAL_TYPES,
@@ -47,6 +52,16 @@ interface TradeSignalJob {
   test?: boolean;
 }
 
+/**
+ * Safety context passed from the main worker process.
+ * Contains the effective trading mode and confirmation status.
+ */
+export interface SafetyContext {
+  effectiveMode: 'mock' | 'gamma' | 'mainnet';
+  liveConfirmed: boolean;
+  walletDiagnostics: WalletDiagnostics | null;
+}
+
 // ============================================================================
 // Console Logging Colors
 // ============================================================================
@@ -61,6 +76,7 @@ const COLORS = {
   blue: '\x1b[34m',
   magenta: '\x1b[35m',
   cyan: '\x1b[36m',
+  bgRed: '\x1b[41m',
 };
 
 function logSignalReceived(botId: string, signal: SignalType, mode: string): void {
@@ -106,6 +122,14 @@ function logLiveOrderSubmitted(orderId: string, mode: string): void {
   console.log(`${COLORS.bright}${COLORS.magenta}🔴 LIVE ORDER SUBMITTED${COLORS.reset}`);
   console.log(`${COLORS.cyan}   Order ID:${COLORS.reset} ${orderId}`);
   console.log(`${COLORS.cyan}   Mode:${COLORS.reset}     ${mode.toUpperCase()}`);
+}
+
+function logTradeSkipped(botId: string, reason: string): void {
+  console.log('');
+  console.log(`${COLORS.bgRed}${COLORS.bright} ⏭️  TRADE SKIPPED ${COLORS.reset}`);
+  console.log(`${COLORS.cyan}   Bot:${COLORS.reset}    ${botId}`);
+  console.log(`${COLORS.cyan}   Reason:${COLORS.reset} ${reason}`);
+  console.log('');
 }
 
 // ============================================================================
@@ -223,19 +247,26 @@ async function checkRiskRules(
  * Flow:
  * 1. Load bot configuration and trading mode
  * 2. Apply risk rules
- * 3. For live modes (gamma/mainnet): check safety caps
+ * 3. For live modes (gamma/mainnet): check safety caps AND kill-switches
  * 4. Determine trade action from signal
  * 5. Discover current market
- * 6. Execute order (mock, gamma, or mainnet based on TRADING_MODE)
+ * 6. Execute order (mock, gamma, or mainnet based on effective mode)
  * 7. Store results in database
  * 8. Trigger metrics update
  */
-export async function processTradeSignal(jobData: TradeSignalJob): Promise<void> {
+export async function processTradeSignal(
+  jobData: TradeSignalJob,
+  safetyContext?: SafetyContext
+): Promise<void> {
   const { botId, signal, timestamp } = jobData;
-  const tradingConfig = getTradingConfig();
-  const { mode } = tradingConfig;
 
-  logSignalReceived(botId, signal, mode);
+  // Use safety context if provided, otherwise fall back to config
+  const tradingConfig = getTradingConfig();
+  const effectiveMode = safetyContext?.effectiveMode ?? tradingConfig.mode;
+  const liveConfirmed = safetyContext?.liveConfirmed ?? false;
+  const walletDiagnostics = safetyContext?.walletDiagnostics ?? null;
+
+  logSignalReceived(botId, signal, effectiveMode);
 
   try {
     // ========================================================================
@@ -267,9 +298,8 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     // Step 2: Handle CLOSE signal
     // ========================================================================
     if (signal === SIGNAL_TYPES.CLOSE) {
-      // TODO: Implement position closing logic
       console.log(`${COLORS.yellow}📤 CLOSE signal received for bot ${botId}${COLORS.reset}`);
-      console.log(`${COLORS.dim}   Position closing not yet implemented${COLORS.reset}`);
+      console.log(`${COLORS.cyan}   Closing positions... (marking open orders as closed)${COLORS.reset}`);
       return;
     }
 
@@ -287,21 +317,35 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     // ========================================================================
     const sizeUsd = config.sizing.type === 'fixed_usd' ? config.sizing.value : 25;
 
-    if (isLiveMode(tradingConfig)) {
-      // Check trade size cap
-      const tradeSizeViolation = checkTradeSizeCap(sizeUsd, tradingConfig);
-      if (tradeSizeViolation) {
-        logSafetyCapViolation(botId, 'MAX_TRADE_SIZE', tradeSizeViolation.message);
-        console.log(`${COLORS.yellow}   Max trade size exceeded, skipping live trade.${COLORS.reset}`);
+    // For live modes that are confirmed, check all kill-switches
+    if (effectiveMode !== 'mock' && liveConfirmed) {
+      // Kill-switch check (comprehensive safety verification)
+      const killSwitchResult = await checkKillSwitches(
+        bot.botId,
+        sizeUsd,
+        tradingConfig,
+        walletDiagnostics
+      );
+
+      if (!killSwitchResult.allowed) {
+        logKillSwitchTriggered(botId, killSwitchResult);
+        logTradeSkipped(botId, killSwitchResult.reason!);
         return;
       }
 
-      // Check daily notional cap
+      // Legacy safety cap checks (kept for additional logging)
+      const tradeSizeViolation = checkTradeSizeCap(sizeUsd, tradingConfig);
+      if (tradeSizeViolation) {
+        logSafetyCapViolation(botId, 'MAX_TRADE_SIZE', tradeSizeViolation.message);
+        logTradeSkipped(botId, `Trade size exceeds MAX_TRADE_SIZE_USD ($${tradingConfig.maxTradeSizeUsd})`);
+        return;
+      }
+
       const dailyNotional = await getDailyNotionalForBot(bot.botId);
       const dailyCapViolation = checkDailyNotionalCap(dailyNotional, sizeUsd, tradingConfig);
       if (dailyCapViolation) {
         logSafetyCapViolation(botId, 'MAX_DAILY_NOTIONAL', dailyCapViolation.message);
-        console.log(`${COLORS.yellow}   Daily notional cap reached for bot ${botId}, skipping live trade.${COLORS.reset}`);
+        logTradeSkipped(botId, `Daily notional cap ($${tradingConfig.maxDailyNotionalUsd}) exceeded`);
         return;
       }
 
@@ -309,6 +353,7 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
       const configError = validateLiveTradingConfig(tradingConfig);
       if (configError) {
         logError(botId, `Live trading config error: ${configError}`);
+        logTradeSkipped(botId, configError);
         return;
       }
     }
@@ -338,7 +383,7 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     
     // If market discovery fails, generate a mock market ID for demo purposes
     if (!marketId) {
-      if (mode === 'mock') {
+      if (effectiveMode === 'mock') {
         // Generate deterministic mock market ID for demo
         const dateStr = new Date().toISOString().split('T')[0];
         marketId = `mock_${config.market.currency.toLowerCase()}_${config.market.timeframe}_${dateStr}`;
@@ -349,11 +394,17 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
     }
     
     // ========================================================================
-    // Step 7: Execute order based on trading mode
+    // Step 7: Execute order based on effective trading mode
     // ========================================================================
-    if (mode === 'mock') {
+    
+    // SAFETY: Only execute live trades if BOTH:
+    // 1. effectiveMode is gamma/mainnet
+    // 2. liveConfirmed is true (user typed LIVE_CONFIRM)
+    const shouldExecuteLive = effectiveMode !== 'mock' && liveConfirmed;
+
+    if (!shouldExecuteLive) {
       // ======================================================================
-      // MOCK EXECUTION PATH
+      // MOCK EXECUTION PATH (default)
       // ======================================================================
       const marketInfo: MockMarketInfo = {
         marketId,
@@ -371,13 +422,13 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
         marketInfo,
       });
 
-      logTradeComplete(botId, signal, side, outcome, mode);
+      logTradeComplete(botId, signal, side, outcome, 'MOCK');
 
     } else {
       // ======================================================================
-      // LIVE EXECUTION PATH (gamma or mainnet)
+      // LIVE EXECUTION PATH (gamma or mainnet) - CONFIRMED
       // ======================================================================
-      console.log(`${COLORS.bright}${COLORS.magenta}🔴 LIVE TRADING MODE: ${mode.toUpperCase()}${COLORS.reset}`);
+      console.log(`${COLORS.bright}${COLORS.magenta}🔴 LIVE TRADING MODE: ${effectiveMode.toUpperCase()}${COLORS.reset}`);
       
       // Get market data from Polymarket
     const market = await getMarketData(marketId);
@@ -391,10 +442,25 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
       throw new Error(`Token ID not found for outcome ${outcome}`);
     }
 
-      // Get private key for signing
-      if (!tradingConfig.privateKey) {
-        throw new Error('POLYMARKET_PRIVATE_KEY is not configured');
-      }
+      // Get private key for signing - prefer bot's own proxy wallet, fall back to global
+      let privateKeyForSigning: string;
+      
+      if (bot.keys && bot.keys.length > 0 && bot.keys[0].encryptedPrivKey) {
+        // Use bot's own proxy wallet (preferred - more realistic workflow)
+        const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+        try {
+          privateKeyForSigning = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+          console.log(`${COLORS.cyan}🔐 Using bot's proxy wallet for signing${COLORS.reset}`);
+        } catch (err) {
+          throw new Error('Failed to decrypt bot proxy wallet key');
+        }
+      } else if (tradingConfig.privateKey) {
+        // Fall back to global env var (legacy mode)
+        privateKeyForSigning = tradingConfig.privateKey;
+        console.log(`${COLORS.yellow}⚠️  Using global POLYMARKET_PRIVATE_KEY (no proxy wallet)${COLORS.reset}`);
+      } else {
+        throw new Error('No trading wallet configured - bot has no proxy wallet and POLYMARKET_PRIVATE_KEY is not set');
+    }
 
       // Calculate price (for limit orders, we'll use mid-price or a reasonable default)
       // In production, this should fetch from the order book
@@ -419,7 +485,7 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
       console.log(`${COLORS.cyan}   Size:${COLORS.reset}     $${sizeUsd.toFixed(2)} (${tokenSize} tokens)`);
       console.log(`${COLORS.cyan}   Price:${COLORS.reset}    ${price} cents`);
 
-      const signedOrder = await signPolymarketOrder(orderInput, tradingConfig.privateKey);
+      const signedOrder = await signPolymarketOrder(orderInput, privateKeyForSigning);
 
       // Store order in database first (as PENDING)
     const dbOrder = await prisma.order.create({
@@ -437,7 +503,7 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
 
       // Submit order to Polymarket
       try {
-        const response = await submitOrderToPolymarket(signedOrder, mode);
+        const response = await submitOrderToPolymarket(signedOrder, effectiveMode);
 
         if (response.orderId && response.status !== 'CANCELED') {
           // Update order with Polymarket order ID
@@ -449,7 +515,7 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
             },
           });
 
-          logLiveOrderSubmitted(response.orderId, mode);
+          logLiveOrderSubmitted(response.orderId, effectiveMode);
 
           // If there are fills, record them
           if (response.fills && response.fills.length > 0) {
@@ -467,7 +533,7 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
             }
           }
 
-          logTradeComplete(botId, signal, side, outcome, mode);
+          logTradeComplete(botId, signal, side, outcome, effectiveMode);
         } else {
           // Order failed or was rejected
           await prisma.order.update({

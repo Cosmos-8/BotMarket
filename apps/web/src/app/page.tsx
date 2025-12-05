@@ -72,7 +72,7 @@ export default function Home() {
                   <div>
                     <h3 className="text-xl font-semibold text-white">Built on Base</h3>
                     <p className="text-zinc-400 text-sm">
-                      Bot registry deployed on Base Sepolia testnet
+                      Bot registry deployed on Base Mainnet
                     </p>
                   </div>
                 </div>
