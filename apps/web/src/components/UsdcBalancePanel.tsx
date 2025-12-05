@@ -112,16 +112,49 @@ export function UsdcBalancePanel() {
   const [isLoading, setIsLoading] = useState(true);
 
   // Contract write hooks
-  const { writeContract: approveUsdc, data: approveHash } = useWriteContract();
-  const { writeContract: transferUsdc, data: transferHash } = useWriteContract();
+  const { writeContract: approveUsdc, data: approveHash, error: approveError, reset: resetApprove } = useWriteContract();
+  const { writeContract: transferUsdc, data: transferHash, error: transferError, reset: resetTransfer } = useWriteContract();
   
-  const { isLoading: isApproving, isSuccess: approveSuccess } = useWaitForTransactionReceipt({
+  const { isLoading: isApproving, isSuccess: approveSuccess, isError: approveReceiptError } = useWaitForTransactionReceipt({
     hash: approveHash,
   });
   
-  const { isLoading: isTransferring, isSuccess: transferSuccess } = useWaitForTransactionReceipt({
+  const { isLoading: isTransferring, isSuccess: transferSuccess, isError: transferReceiptError } = useWaitForTransactionReceipt({
     hash: transferHash,
   });
+
+  // Handle wallet errors
+  useEffect(() => {
+    if (approveError) {
+      console.error('Approve error:', approveError);
+      setError(approveError.message.includes('User rejected') 
+        ? 'Transaction cancelled by user' 
+        : `Approval failed: ${approveError.message.slice(0, 100)}`);
+      setIsDepositing(false);
+      setDepositStep('idle');
+      resetApprove();
+    }
+  }, [approveError, resetApprove]);
+
+  useEffect(() => {
+    if (transferError) {
+      console.error('Transfer error:', transferError);
+      setError(transferError.message.includes('User rejected')
+        ? 'Transaction cancelled by user'
+        : `Transfer failed: ${transferError.message.slice(0, 100)}`);
+      setIsDepositing(false);
+      setDepositStep('idle');
+      resetTransfer();
+    }
+  }, [transferError, resetTransfer]);
+
+  useEffect(() => {
+    if (approveReceiptError || transferReceiptError) {
+      setError('Transaction failed on-chain. Please try again.');
+      setIsDepositing(false);
+      setDepositStep('idle');
+    }
+  }, [approveReceiptError, transferReceiptError]);
 
   // Load bridge config
   useEffect(() => {
@@ -190,7 +223,27 @@ export function UsdcBalancePanel() {
 
   // Handle deposit
   const handleDeposit = async () => {
-    if (!address || !bridgeConfig?.platformWallet || !depositAmount) return;
+    console.log('[Deposit] Starting deposit flow');
+    console.log('[Deposit] Address:', address);
+    console.log('[Deposit] Platform wallet:', bridgeConfig?.platformWallet);
+    console.log('[Deposit] Amount:', depositAmount);
+    console.log('[Deposit] Balances:', balances);
+
+    if (!address) {
+      setError('Please connect your wallet');
+      return;
+    }
+    
+    if (!bridgeConfig?.platformWallet) {
+      setError('Platform not configured. Please contact support.');
+      console.error('[Deposit] Platform wallet not configured in bridge config');
+      return;
+    }
+    
+    if (!depositAmount) {
+      setError('Please enter an amount');
+      return;
+    }
     
     const amount = parseFloat(depositAmount);
     if (isNaN(amount) || amount < 1) {
@@ -198,8 +251,8 @@ export function UsdcBalancePanel() {
       return;
     }
 
-    if (balances && amount > balances.base.balance) {
-      setError(`Insufficient balance. You have ${balances.base.balance.toFixed(2)} USDC on Base.`);
+    if (!balances || balances.base.balance < amount) {
+      setError(`Insufficient USDC on Base. You have ${balances?.base.balance.toFixed(2) || '0'} USDC. You need to get USDC on Base first.`);
       return;
     }
 
@@ -209,12 +262,14 @@ export function UsdcBalancePanel() {
 
     try {
       // Step 1: Create deposit request
+      console.log('[Deposit] Creating deposit request...');
       const createRes = await fetch(`${API_URL}/bridge/deposit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ address, amount }),
       });
       const createData = await createRes.json();
+      console.log('[Deposit] Create response:', createData);
       
       if (!createData.success) {
         throw new Error(createData.error || 'Failed to create deposit');
@@ -224,6 +279,11 @@ export function UsdcBalancePanel() {
       const amountWei = parseUnits(amount.toString(), 6);
 
       // Step 2: Approve USDC
+      console.log('[Deposit] Requesting USDC approval...');
+      console.log('[Deposit] USDC contract:', bridgeConfig.base.usdc);
+      console.log('[Deposit] Spender:', bridgeConfig.platformWallet);
+      console.log('[Deposit] Amount (wei):', amountWei.toString());
+      
       setDepositStep('approving');
       approveUsdc({
         address: bridgeConfig.base.usdc as `0x${string}`,
@@ -233,6 +293,7 @@ export function UsdcBalancePanel() {
       });
 
     } catch (err: any) {
+      console.error('[Deposit] Error:', err);
       setError(err.message || 'Deposit failed');
       setIsDepositing(false);
       setDepositStep('idle');
