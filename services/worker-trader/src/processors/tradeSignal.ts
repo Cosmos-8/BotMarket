@@ -258,10 +258,10 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
         marketId = `mock_${config.market.currency.toLowerCase()}_${config.market.timeframe}_${dateStr}`;
         console.log(`${COLORS.yellow}⚠️  Market not found, using mock market ID: ${marketId}${COLORS.reset}`);
       } else {
-        throw new Error(`Could not find current market for ${config.market.currency} ${config.market.timeframe}`);
-      }
+      throw new Error(`Could not find current market for ${config.market.currency} ${config.market.timeframe}`);
     }
-
+    }
+    
     // Calculate order size
     const sizeUsd = config.sizing.type === 'fixed_usd' ? config.sizing.value : 25; // Default $25
 
@@ -298,67 +298,67 @@ export async function processTradeSignal(jobData: TradeSignalJob): Promise<void>
       console.log(`${COLORS.bright}${COLORS.magenta}🔴 LIVE TRADING MODE${COLORS.reset}`);
       
       // Get market data from Polymarket
-      const market = await getMarketData(marketId);
-      if (!market) {
+    const market = await getMarketData(marketId);
+    if (!market) {
         throw new Error(`Market ${marketId} not found on Polymarket`);
-      }
+    }
 
-      // Get token ID for outcome
-      const tokenId = getTokenIdForOutcome(market, outcome);
-      if (!tokenId) {
-        throw new Error(`Token ID not found for outcome ${outcome}`);
-      }
+    // Get token ID for outcome
+    const tokenId = getTokenIdForOutcome(market, outcome);
+    if (!tokenId) {
+      throw new Error(`Token ID not found for outcome ${outcome}`);
+    }
 
-      // TODO: Get current market price for limit orders
-      const price = 0.5; // Placeholder - should fetch from market
+    // TODO: Get current market price for limit orders
+    const price = 0.5; // Placeholder - should fetch from market
 
       // Create order (requires bot key)
-      const botKey = bot.keys[0];
-      if (!botKey) {
-        throw new Error(`Bot ${botId} has no trading key configured`);
-      }
+    const botKey = bot.keys[0];
+    if (!botKey) {
+      throw new Error(`Bot ${botId} has no trading key configured`);
+    }
 
-      const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET;
-      if (!encryptionSecret) {
-        throw new Error('BOT_KEY_ENCRYPTION_SECRET not configured');
-      }
+    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET;
+    if (!encryptionSecret) {
+      throw new Error('BOT_KEY_ENCRYPTION_SECRET not configured');
+    }
 
       // Decrypt private key (for live trading - use with caution)
-      const privateKey = decryptPrivateKey(botKey.encryptedPrivKey, encryptionSecret);
+    const privateKey = decryptPrivateKey(botKey.encryptedPrivKey, encryptionSecret);
 
-      const order = await createOrder(tokenId, side, price, sizeUsd, privateKey);
-      if (!order) {
-        throw new Error('Failed to create order');
-      }
+    const order = await createOrder(tokenId, side, price, sizeUsd, privateKey);
+    if (!order) {
+      throw new Error('Failed to create order');
+    }
 
-      // Store order in database
-      const dbOrder = await prisma.order.create({
-        data: {
+    // Store order in database
+    const dbOrder = await prisma.order.create({
+      data: {
           botId: bot.botId,
           marketId,
-          outcome,
-          side,
-          price,
-          size: sizeUsd,
-          status: 'PENDING',
-          tokenId,
-        },
-      });
+        outcome,
+        side,
+        price,
+        size: sizeUsd,
+        status: 'PENDING',
+        tokenId,
+      },
+    });
 
-      // Submit order to Polymarket (if API credentials available)
-      const apiKey = process.env.POLYMARKET_API_KEY;
-      const apiSecret = process.env.POLYMARKET_API_SECRET;
-      const apiPassphrase = process.env.POLYMARKET_API_PASSPHRASE;
+    // Submit order to Polymarket (if API credentials available)
+    const apiKey = process.env.POLYMARKET_API_KEY;
+    const apiSecret = process.env.POLYMARKET_API_SECRET;
+    const apiPassphrase = process.env.POLYMARKET_API_PASSPHRASE;
 
-      if (apiKey && apiSecret && apiPassphrase) {
-        const orderId = await submitOrder(order, apiKey, apiSecret, apiPassphrase);
-        if (orderId) {
-          await prisma.order.update({
-            where: { id: dbOrder.id },
-            data: { orderId },
-          });
-        }
-      } else {
+    if (apiKey && apiSecret && apiPassphrase) {
+      const orderId = await submitOrder(order, apiKey, apiSecret, apiPassphrase);
+      if (orderId) {
+        await prisma.order.update({
+          where: { id: dbOrder.id },
+          data: { orderId },
+        });
+      }
+    } else {
         console.log(`${COLORS.yellow}⚠️  Polymarket API credentials not configured${COLORS.reset}`);
         console.log(`${COLORS.dim}   Order stored but not submitted to Polymarket${COLORS.reset}`);
       }

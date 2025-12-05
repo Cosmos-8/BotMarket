@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { Providers } from './providers';
 import { Header } from '@/components/Header';
+import { Footer } from '@/components/Footer';
+import { MockTradingBanner } from '@/components/MockTradingBanner';
 
 export const metadata: Metadata = {
   title: 'BotMarket - Polymarket Bot Builder',
@@ -14,11 +16,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-gray-50">
+    <html lang="en" className="dark">
+      <body className="min-h-screen bg-dark-900 text-white flex flex-col">
         <Providers>
           <Header />
-          <main>{children}</main>
+          <MockTradingBanner />
+          <main className="flex-1">{children}</main>
+          <Footer />
         </Providers>
       </body>
     </html>
