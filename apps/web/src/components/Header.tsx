@@ -4,6 +4,7 @@
  * Global Header Component
  * 
  * Displays navigation and wallet connect button across all pages.
+ * Dark theme styled.
  */
 
 import Link from 'next/link';
@@ -16,8 +17,8 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 
 const NAV_LINKS = [
   { href: '/', label: 'Home' },
-  { href: '/create', label: 'Create Bot' },
   { href: '/marketplace', label: 'Marketplace' },
+  { href: '/create', label: 'Create Bot' },
 ];
 
 // ============================================================================
@@ -28,27 +29,31 @@ export function Header() {
   const pathname = usePathname();
 
   return (
-    <header className="bg-white shadow-sm border-b sticky top-0 z-50">
+    <header className="bg-dark-800/80 backdrop-blur-md border-b border-white/5 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
-          <Link href="/" className="flex items-center space-x-2">
-            <span className="text-2xl">🤖</span>
-            <span className="text-xl font-bold text-gray-900">BotMarket</span>
+          <Link href="/" className="flex items-center space-x-3 group">
+            <div className="w-9 h-9 bg-accent/10 rounded-lg flex items-center justify-center group-hover:bg-accent/20 transition-colors">
+              <span className="text-xl">🤖</span>
+            </div>
+            <span className="text-xl font-bold text-white">
+              Bot<span className="text-accent">Market</span>
+            </span>
           </Link>
 
-          {/* Navigation */}
-          <nav className="hidden md:flex items-center space-x-1">
+          {/* Center Navigation */}
+          <nav className="hidden md:flex items-center space-x-1 bg-dark-700/50 rounded-lg p-1">
             {NAV_LINKS.map((link) => {
               const isActive = pathname === link.href;
               return (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
                     isActive
-                      ? 'bg-blue-50 text-blue-600'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      ? 'bg-accent text-white shadow-lg shadow-accent/20'
+                      : 'text-zinc-400 hover:text-white hover:bg-white/5'
                   }`}
                 >
                   {link.label}
@@ -58,7 +63,7 @@ export function Header() {
           </nav>
 
           {/* Connect Button */}
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center">
             <ConnectButton 
               showBalance={false}
               chainStatus="icon"
@@ -72,16 +77,18 @@ export function Header() {
       </div>
 
       {/* Mobile Navigation */}
-      <div className="md:hidden border-t">
-        <div className="flex justify-around py-2">
+      <div className="md:hidden border-t border-white/5">
+        <div className="flex justify-around py-2 bg-dark-800/50">
           {NAV_LINKS.map((link) => {
             const isActive = pathname === link.href;
             return (
               <Link
                 key={link.href}
                 href={link.href}
-                className={`px-3 py-2 text-sm font-medium ${
-                  isActive ? 'text-blue-600' : 'text-gray-600'
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  isActive 
+                    ? 'text-accent bg-accent/10' 
+                    : 'text-zinc-400 hover:text-white'
                 }`}
               >
                 {link.label}
@@ -95,4 +102,3 @@ export function Header() {
 }
 
 export default Header;
-
