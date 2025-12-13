@@ -16,6 +16,7 @@ import {
   WalletDiagnostics,
   SafetyVerificationResult,
 } from './lib/safetyVerification';
+import { processClaimablePositions } from './lib/claimPositions';
 
 dotenv.config();
 
@@ -197,14 +198,55 @@ worker.on('error', (err) => {
   console.log('');
 
   // ========================================================================
+  // Step 7: Start Position Claiming Worker (runs every hour)
+  // ========================================================================
+  console.log(`${COLORS.cyan}💰 Starting automatic position claiming worker...${COLORS.reset}`);
+  console.log(`${COLORS.cyan}   Checking for claimable positions every hour${COLORS.reset}`);
+  console.log('');
+
+  // Run immediately on startup, then every hour
+  const claimPositions = async () => {
+    try {
+      console.log(`${COLORS.cyan}🔍 Checking for claimable positions...${COLORS.reset}`);
+      const results = await processClaimablePositions();
+      
+      if (results.length > 0) {
+        const successful = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+        
+        console.log(`${COLORS.green}✅ Claimed positions for ${successful.length} bot(s)${COLORS.reset}`);
+        if (failed.length > 0) {
+          console.log(`${COLORS.yellow}⚠️  Failed to claim positions for ${failed.length} bot(s)${COLORS.reset}`);
+        }
+        
+        // Log details
+        for (const result of successful) {
+          console.log(`   Bot ${result.botId}: Claimed $${result.amountClaimed.toFixed(2)} from market ${result.marketId}`);
+        }
+      } else {
+        console.log(`${COLORS.cyan}   No claimable positions found${COLORS.reset}`);
+      }
+    } catch (error: any) {
+      console.error(`${COLORS.red}❌ Error processing claimable positions:${COLORS.reset}`, error);
+    }
+  };
+
+  // Run immediately
+  claimPositions();
+
+  // Then run every hour (3600000 ms)
+  const claimInterval = setInterval(claimPositions, 60 * 60 * 1000);
+
+  // ========================================================================
   // Graceful Shutdown
   // ========================================================================
   const shutdown = async (signal: string) => {
     console.log(`${signal} received, shutting down worker...`);
-  await worker.close();
-  await prisma.$disconnect();
-  await redis.quit();
-  process.exit(0);
+    clearInterval(claimInterval);
+    await worker.close();
+    await prisma.$disconnect();
+    await redis.quit();
+    process.exit(0);
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
