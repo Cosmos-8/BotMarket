@@ -55,6 +55,16 @@ export async function sendTestSignal(botId: string, signal: string) {
   return response.data;
 }
 
+export async function deleteBot(botId: string) {
+  const response = await api.delete(`/bots/${botId}`);
+  return response.data;
+}
+
+export async function getBotSignals(botId: string, limit = 20) {
+  const response = await api.get(`/bots/${botId}/signals`, { params: { limit } });
+  return response.data;
+}
+
 // Marketplace
 export async function getMarketplace(params?: any) {
   const response = await api.get('/marketplace', { params });
@@ -79,6 +89,27 @@ export async function sendWebhook(botId: string, payload: any, secret?: string) 
 // Admin
 export async function simulateFill(data: any) {
   const response = await api.post('/admin/simulate-fill', data);
+  return response.data;
+}
+
+// Balance
+export async function getBalance(address: string) {
+  const response = await api.get(`/balance/${address}`);
+  return response.data;
+}
+
+export async function fundBalance(address: string, amount: number) {
+  const response = await api.post('/balance/fund', { address, amount });
+  return response.data;
+}
+
+export async function allocateToBot(address: string, botId: string, amount: number) {
+  const response = await api.post('/balance/allocate-to-bot', { address, botId, amount });
+  return response.data;
+}
+
+export async function getBotBalance(botId: string) {
+  const response = await api.get(`/balance/bot/${botId}`);
   return response.data;
 }
 

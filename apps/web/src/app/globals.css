@@ -1,8 +1,74 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-50 text-gray-900;
+/* Base dark theme */
+:root {
+  --bg-primary: #050509;
+  --bg-secondary: #0B0B0F;
+  --bg-tertiary: #111118;
+  --bg-surface: #181822;
+  --bg-surface-light: #1E1E2A;
+  --accent: #4CA3FF;
+  --accent-hover: #3B8FE8;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A1A1AA;
+  --text-muted: #71717A;
+  --border-default: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.1);
 }
 
+body {
+  @apply bg-dark-900 text-white antialiased;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-surface-light);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a2a3a;
+}
+
+/* Form inputs dark theme */
+input, select, textarea {
+  @apply bg-dark-600 border-white/10 text-white placeholder-zinc-500;
+}
+
+input:focus, select:focus, textarea:focus {
+  @apply border-accent ring-1 ring-accent/30;
+}
+
+/* Card hover animation */
+.card-hover {
+  @apply transition-all duration-200 ease-out;
+}
+
+.card-hover:hover {
+  @apply transform scale-[1.02] shadow-xl shadow-black/20;
+  border-color: rgba(76, 163, 255, 0.3);
+}
+
+/* Gradient text */
+.gradient-text {
+  @apply bg-gradient-to-r from-accent to-blue-400 bg-clip-text text-transparent;
+}
+
+/* Glass effect */
+.glass {
+  @apply bg-white/5 backdrop-blur-md border border-white/10;
+}

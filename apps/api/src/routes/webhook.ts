@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
+import type { Router as IRouter } from 'express';
 import { prisma } from '../lib/prisma';
 import { tradeSignalQueue } from '../lib/queue';
 import { parseWebhookSignal, hashPayload, verifyWebhookSecret } from '@botmarket/shared';
 
-const router = Router();
+const router: IRouter = Router();
 
 /**
  * POST /webhook/:botId
@@ -71,7 +72,7 @@ router.post('/:botId', async (req: Request, res: Response) => {
     const payloadHash = hashPayload(payload);
     await prisma.signal.create({
       data: {
-        botId: bot.id,
+        botId: bot.botId, // Use external botId, not internal id
         payloadHash,
         parsedSignalJSON: parsedSignal as any,
         signalType: parsedSignal.signalType,

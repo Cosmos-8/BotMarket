@@ -1,0 +1,9 @@
+{
+  "_comment": "Deployed via: pnpm deploy:contracts on 2025-12-03",
+  "chainId": 84532,
+  "network": "Base Sepolia",
+  "contracts": {
+    "BotRegistry": "0x2239F90B2EE92a3ef47525A4041e840602B1d427"
+  },
+  "blockExplorer": "https://sepolia.basescan.org"
+}
