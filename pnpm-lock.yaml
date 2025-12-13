@@ -21,7 +21,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@prisma/client':
-        specifier: ^5.7.1
+        specifier: ^5.22.0
         version: 5.22.0(prisma@5.22.0)
       bullmq:
         specifier: ^5.1.0
