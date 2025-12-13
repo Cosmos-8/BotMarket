@@ -3,13 +3,13 @@
 /**
  * Web3 Providers
  * 
- * Configures wagmi + RainbowKit for Base Mainnet.
+ * Configures wagmi + RainbowKit for Polygon Mainnet.
  * Wraps the entire app to provide wallet connection functionality.
  */
 
 import { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
-import { base } from 'wagmi/chains';
+import { polygon } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   RainbowKitProvider,
@@ -36,7 +36,7 @@ const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_I
 const config = getDefaultConfig({
   appName: 'BotMarket',
   projectId: WALLETCONNECT_PROJECT_ID,
-  chains: [base],
+  chains: [polygon],
   ssr: true,
   wallets: [
     {
@@ -90,4 +90,3 @@ export function Providers({ children }: ProvidersProps) {
 }
 
 export default Providers;
-

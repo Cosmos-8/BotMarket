@@ -221,8 +221,8 @@ async function ensureDemoUser(): Promise<void> {
   console.log('👤 Ensuring demo user exists...');
   
   await prisma.user.upsert({
-    where: { baseAddress: DEMO_CREATOR_ADDRESS },
-    create: { baseAddress: DEMO_CREATOR_ADDRESS },
+    where: { polygonAddress: DEMO_CREATOR_ADDRESS },
+    create: { polygonAddress: DEMO_CREATOR_ADDRESS },
     update: {},
   });
   

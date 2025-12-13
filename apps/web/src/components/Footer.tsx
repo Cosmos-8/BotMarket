@@ -24,7 +24,7 @@ export function Footer() {
           <div className="flex items-center space-x-6 text-sm text-zinc-400">
             <span className="flex items-center space-x-2">
               <span className="text-accent">⛓️</span>
-              <span>Built on Base</span>
+              <span>Built on Polygon</span>
             </span>
             <span className="hidden md:inline text-zinc-600">•</span>
             <span className="flex items-center space-x-2">

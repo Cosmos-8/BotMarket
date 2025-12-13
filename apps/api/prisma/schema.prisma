@@ -12,68 +12,29 @@ datasource db {
 
 model User {
   id                  String   @id @default(cuid())
-  baseAddress         String   @unique
-  usdcBalance         Float    @default(0) // USDC balance on Polygon (real, from bridge)
+  polygonAddress      String   @unique // User's Polygon wallet address
+  usdcBalance         Float    @default(0) // USDC balance on Polygon (deposited to proxy wallet)
   // Polygon proxy wallet for Polymarket trading
-  proxyWalletAddress  String?  // Derived Polygon address
+  proxyWalletAddress  String?  // Derived Polygon address for trading
   encryptedProxyKey   String?  // Encrypted private key for proxy wallet
   createdAt           DateTime @default(now())
   updatedAt           DateTime @default(now()) @updatedAt
 
   createdBots   Bot[]
-  bridgeTxs     BridgeTransaction[]
-}
-
-// CCTP Bridge Transaction tracking
-model BridgeTransaction {
-  id                String   @id @default(cuid())
-  userAddress       String   // User's Base address
-  amount            Float    // Amount in USDC
-  direction         String   // 'deposit' (Base->Polygon) or 'withdraw' (Polygon->Base)
-  status            String   @default("pending") // pending, burning, attesting, minting, completed, failed
-  
-  // Source chain details
-  sourceTxHash      String?  // Burn transaction hash
-  sourceChain       String   // 'base' or 'polygon'
-  
-  // CCTP message details
-  messageBytes      String?  // Raw message bytes for minting
-  messageHash       String?  // Hash for attestation lookup
-  nonce             String?  // CCTP nonce
-  attestation       String?  // Circle attestation signature
-  
-  // Destination chain details
-  destinationTxHash String?  // Mint transaction hash
-  destinationChain  String   // 'polygon' or 'base'
-  destinationAddress String  // Where funds will be minted
-  
-  // Timestamps
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @default(now()) @updatedAt
-  completedAt       DateTime?
-  
-  // Error tracking
-  error             String?
-  
-  user User @relation(fields: [userAddress], references: [baseAddress])
-  
-  @@index([userAddress])
-  @@index([status])
-  @@index([messageHash])
-  @@index([createdAt])
 }
 
 model Bot {
   id           String   @id @default(cuid())
   botId        String   @unique // On-chain bot ID
-  creator      String   // Base address
+  creator      String   // Polygon address
   parentBotId  String?  // For forked bots
   visibility   String   @default("PUBLIC") // PUBLIC or PRIVATE
   metadataURI  String?  // IPFS or API-hosted metadata
   configHash   String   // Hash of config for on-chain verification
+  isActive     Boolean  @default(false) // Whether the bot is actively trading
   createdAt    DateTime @default(now())
 
-  creatorUser User?     @relation(fields: [creator], references: [baseAddress])
+  creatorUser User?     @relation(fields: [creator], references: [polygonAddress])
   parentBot   Bot?      @relation("BotFork", fields: [parentBotId], references: [botId])
   forkedBots  Bot[]     @relation("BotFork")
   configs     BotConfig[]
@@ -86,6 +47,7 @@ model Bot {
   @@index([creator])
   @@index([parentBotId])
   @@index([visibility])
+  @@index([isActive])
 }
 
 model BotConfig {
@@ -181,4 +143,3 @@ model BotMetrics {
   @@index([roiPct])
   @@index([pnlUsd])
 }
-

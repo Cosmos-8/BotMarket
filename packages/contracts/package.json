@@ -5,10 +5,10 @@
     "build": "forge build",
     "test": "forge test",
     "clean": "forge clean",
-    "deploy:base-sepolia": "forge script script/DeployBotRegistry.s.sol --rpc-url https://sepolia.base.org --broadcast",
-    "deploy:base-sepolia:verify": "forge script script/DeployBotRegistry.s.sol --rpc-url https://sepolia.base.org --broadcast --verify",
-    "deploy:base-mainnet": "forge script script/DeployBotRegistry.s.sol --rpc-url https://mainnet.base.org --broadcast",
-    "deploy:base-mainnet:verify": "forge script script/DeployBotRegistry.s.sol --rpc-url https://mainnet.base.org --broadcast --verify",
+    "deploy:polygon-mainnet": "forge script script/DeployBotRegistry.s.sol --rpc-url https://polygon-rpc.com --broadcast",
+    "deploy:polygon-mainnet:verify": "forge script script/DeployBotRegistry.s.sol --rpc-url https://polygon-rpc.com --broadcast --verify",
+    "deploy:polygon-amoy": "forge script script/DeployBotRegistry.s.sol --rpc-url https://rpc-amoy.polygon.technology --broadcast",
+    "deploy:polygon-amoy:verify": "forge script script/DeployBotRegistry.s.sol --rpc-url https://rpc-amoy.polygon.technology --broadcast --verify",
     "deploy:local": "forge script script/DeployBotRegistry.s.sol --rpc-url http://localhost:8545 --broadcast"
   },
   "devDependencies": {

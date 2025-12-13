@@ -40,7 +40,6 @@ import marketplaceRoutes from './routes/marketplace';
 import adminRoutes from './routes/admin';
 import balanceRoutes from './routes/balance';
 import polymarketRoutes from './routes/polymarket';
-import bridgeRoutes from './routes/bridge';
 
 app.use('/bots', botRoutes);
 app.use('/webhook', webhookRoutes);
@@ -48,14 +47,9 @@ app.use('/marketplace', marketplaceRoutes);
 app.use('/admin', adminRoutes);
 app.use('/balance', balanceRoutes);
 app.use('/polymarket', polymarketRoutes);
-app.use('/bridge', bridgeRoutes);
 
 // Start market cache service
 import './services/marketCacheService';
-
-// Start CCTP bridge worker
-import { startBridgeWorker } from './services/bridgeWorker';
-startBridgeWorker();
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -81,4 +75,3 @@ process.on('SIGTERM', async () => {
 });
 
 export { app, prisma, redis };
-

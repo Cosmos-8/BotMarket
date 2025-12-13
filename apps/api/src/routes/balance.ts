@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import type { Router as IRouter } from 'express';
 import { prisma } from '../lib/prisma';
-import { getAddress, isAddress, Wallet } from 'ethers';
-import { encryptPrivateKey } from '@botmarket/shared';
+import { getAddress, isAddress, Wallet, JsonRpcProvider, Contract, parseUnits, formatUnits } from 'ethers';
+import { encryptPrivateKey, decryptPrivateKey } from '@botmarket/shared';
 
 const router: IRouter = Router();
 
@@ -12,6 +12,18 @@ const router: IRouter = Router();
 
 const MAX_FUND_AMOUNT = 1_000_000; // Max $1M per transaction
 const MIN_FUND_AMOUNT = 0.01;      // Min $0.01
+const MIN_WITHDRAW_AMOUNT = 0.01;  // Min $0.01 for withdrawal
+
+// USDC Contract on Polygon Mainnet
+const USDC_ADDRESS = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
+const USDC_DECIMALS = 6;
+
+// USDC ABI (minimal - just transfer function)
+const USDC_ABI = [
+  'function transfer(address to, uint256 amount) external returns (bool)',
+  'function balanceOf(address account) external view returns (uint256)',
+  'function decimals() external view returns (uint8)',
+];
 
 // ============================================================================
 // Logging Helpers
@@ -27,11 +39,17 @@ function logBalance(address: string, balance: number): void {
   console.log(`💰 GET BALANCE: ${shortAddr} → ${balance.toFixed(2)} USDC`);
 }
 
+function logWithdraw(from: string, to: string, amount: number, txHash: string): void {
+  const shortFrom = `${from.slice(0, 6)}...${from.slice(-4)}`;
+  const shortTo = `${to.slice(0, 6)}...${to.slice(-4)}`;
+  console.log(`💸 WITHDRAW: $${amount.toFixed(2)} USDC from ${shortFrom} → ${shortTo} | TX: ${txHash}`);
+}
+
 /**
  * Create a proxy wallet for a user if they don't have one.
  * This is their "main pool" wallet on Polygon for Polymarket trading.
  */
-async function ensureProxyWallet(userId: string, baseAddress: string): Promise<{ address: string; isNew: boolean }> {
+async function ensureProxyWallet(userId: string, polygonAddress: string): Promise<{ address: string; isNew: boolean }> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { proxyWalletAddress: true, encryptedProxyKey: true },
@@ -57,7 +75,7 @@ async function ensureProxyWallet(userId: string, baseAddress: string): Promise<{
     },
   });
 
-  const shortAddr = `${baseAddress.slice(0, 6)}...${baseAddress.slice(-4)}`;
+  const shortAddr = `${polygonAddress.slice(0, 6)}...${polygonAddress.slice(-4)}`;
   console.log(`🔐 Created proxy wallet for ${shortAddr}: ${proxyAddress}`);
 
   return { address: proxyAddress, isNew: true };
@@ -69,7 +87,7 @@ async function ensureProxyWallet(userId: string, baseAddress: string): Promise<{
 
 /**
  * GET /balance/:address
- * Get USDC balance for a wallet address.
+ * Get USDC balance for a wallet address on Polygon.
  * Creates user with 0 balance if not exists.
  * Also initializes proxy wallet for Polymarket trading.
  */
@@ -88,11 +106,11 @@ router.get('/:address', async (req: Request, res: Response) => {
     // Normalize address (checksum)
     const normalizedAddress = getAddress(address);
 
-    // Find or create user
+    // Find or create user (using Polygon address)
     const user = await prisma.user.upsert({
-      where: { baseAddress: normalizedAddress },
+      where: { polygonAddress: normalizedAddress },
       create: {
-        baseAddress: normalizedAddress,
+        polygonAddress: normalizedAddress,
         usdcBalance: 0,
       },
       update: {}, // No update needed, just ensure exists
@@ -113,7 +131,7 @@ router.get('/:address', async (req: Request, res: Response) => {
           address: proxyWallet.address,
           network: 'Polygon',
           isNew: proxyWallet.isNew,
-          note: 'This is your main trading wallet on Polygon. Fund it with USDC and MATIC.',
+          note: 'This is your main trading wallet on Polygon. Deposit USDC here.',
         },
       },
     });
@@ -128,7 +146,8 @@ router.get('/:address', async (req: Request, res: Response) => {
 
 /**
  * POST /balance/fund
- * Add USDC to wallet balance (mock funding).
+ * Record a USDC deposit to wallet balance.
+ * In production, this would verify the on-chain transfer first.
  * 
  * Body: { address: string, amount: number }
  */
@@ -169,11 +188,11 @@ router.post('/fund', async (req: Request, res: Response) => {
     // Normalize address
     const normalizedAddress = getAddress(address);
 
-    // Upsert user and add to balance
+    // Upsert user and add to balance (using Polygon address)
     const user = await prisma.user.upsert({
-      where: { baseAddress: normalizedAddress },
+      where: { polygonAddress: normalizedAddress },
       create: {
-        baseAddress: normalizedAddress,
+        polygonAddress: normalizedAddress,
         usdcBalance: amount,
       },
       update: {
@@ -229,9 +248,9 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
 
     const normalizedAddress = getAddress(address);
 
-    // Get user and check balance
+    // Get user and check balance (using Polygon address)
     const user = await prisma.user.findUnique({
-      where: { baseAddress: normalizedAddress },
+      where: { polygonAddress: normalizedAddress },
     });
 
     if (!user) {
@@ -263,7 +282,7 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
     await prisma.$transaction([
       // Deduct from user's pool
       prisma.user.update({
-        where: { baseAddress: normalizedAddress },
+        where: { polygonAddress: normalizedAddress },
         data: { usdcBalance: { decrement: amount } },
       }),
       // Update or create bot metrics with allocated balance
@@ -285,7 +304,7 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
 
     // Get updated balances
     const updatedUser = await prisma.user.findUnique({
-      where: { baseAddress: normalizedAddress },
+      where: { polygonAddress: normalizedAddress },
     });
 
     console.log(`💸 ALLOCATE: $${amount} from ${normalizedAddress.slice(0,6)}... to bot ${botId}`);
@@ -335,5 +354,327 @@ router.get('/bot/:botId', async (req: Request, res: Response) => {
   }
 });
 
-export default router;
+/**
+ * POST /balance/withdraw
+ * Withdraw USDC from main platform balance (proxy wallet -> user wallet)
+ * 
+ * Body: { address: string, amount: number, toAddress: string }
+ */
+router.post('/withdraw', async (req: Request, res: Response) => {
+  try {
+    const { address, amount, toAddress } = req.body;
 
+    // Validate inputs
+    if (!address || !isAddress(address)) {
+      return res.status(400).json({ success: false, error: 'Invalid from address' });
+    }
+
+    if (!toAddress || !isAddress(toAddress)) {
+      return res.status(400).json({ success: false, error: 'Invalid to address' });
+    }
+
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid amount' });
+    }
+
+    if (amount < MIN_WITHDRAW_AMOUNT) {
+      return res.status(400).json({
+        success: false,
+        error: `Amount must be at least ${MIN_WITHDRAW_AMOUNT} USDC`,
+      });
+    }
+
+    const normalizedAddress = getAddress(address);
+    const normalizedToAddress = getAddress(toAddress);
+
+    // Get user and check balance
+    const user = await prisma.user.findUnique({
+      where: { polygonAddress: normalizedAddress },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    if (!user.proxyWalletAddress || !user.encryptedProxyKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'No proxy wallet found. Please deposit funds first.',
+      });
+    }
+
+    if (user.usdcBalance < amount) {
+      return res.status(400).json({
+        success: false,
+        error: `Insufficient balance. You have $${user.usdcBalance.toFixed(2)} but tried to withdraw $${amount.toFixed(2)}`,
+      });
+    }
+
+    // Decrypt proxy wallet private key
+    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+    let privateKey: string;
+    try {
+      privateKey = decryptPrivateKey(user.encryptedProxyKey, encryptionSecret);
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to decrypt wallet key',
+      });
+    }
+
+    // Get RPC provider
+    const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+    const provider = new JsonRpcProvider(rpcUrl);
+
+    // Create wallet and USDC contract
+    const wallet = new Wallet(privateKey, provider);
+    const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, wallet);
+
+    // Check on-chain balance
+    const onChainBalance = await usdcContract.balanceOf(wallet.address);
+    const onChainBalanceFormatted = parseFloat(formatUnits(onChainBalance, USDC_DECIMALS));
+
+    if (onChainBalanceFormatted < amount) {
+      return res.status(400).json({
+        success: false,
+        error: `Insufficient on-chain balance. Wallet has $${onChainBalanceFormatted.toFixed(2)} USDC`,
+      });
+    }
+
+    // Transfer USDC
+    const amountWei = parseUnits(amount.toFixed(USDC_DECIMALS), USDC_DECIMALS);
+    const tx = await usdcContract.transfer(normalizedToAddress, amountWei);
+    const receipt = await tx.wait();
+
+    // Update database balance
+    const updatedUser = await prisma.user.update({
+      where: { polygonAddress: normalizedAddress },
+      data: {
+        usdcBalance: {
+          decrement: amount,
+        },
+      },
+    });
+
+    logWithdraw(wallet.address, normalizedToAddress, amount, receipt.hash);
+
+    res.json({
+      success: true,
+      data: {
+        txHash: receipt.hash,
+        amount,
+        from: wallet.address,
+        to: normalizedToAddress,
+        newBalance: updatedUser.usdcBalance,
+      },
+      message: `Successfully withdrew ${amount} USDC`,
+    });
+  } catch (error: any) {
+    console.error('Error withdrawing balance:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to withdraw balance',
+    });
+  }
+});
+
+/**
+ * POST /balance/bot/:botId/withdraw
+ * Withdraw USDC from bot balance
+ * 
+ * Options:
+ * 1. Withdraw to main trading pool (internal transfer - no on-chain)
+ * 2. Withdraw to user wallet (on-chain transfer)
+ * 
+ * Body: { address: string, amount: number, toAddress?: string, toPool?: boolean }
+ * - If toPool is true: internal transfer to user's main pool (no on-chain)
+ * - If toPool is false or undefined: on-chain transfer to toAddress (or address if not provided)
+ */
+router.post('/bot/:botId/withdraw', async (req: Request, res: Response) => {
+  try {
+    const { botId } = req.params;
+    const { address, amount, toAddress, toPool } = req.body;
+
+    // Validate inputs
+    if (!address || !isAddress(address)) {
+      return res.status(400).json({ success: false, error: 'Invalid address' });
+    }
+
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid amount' });
+    }
+
+    if (amount < MIN_WITHDRAW_AMOUNT) {
+      return res.status(400).json({
+        success: false,
+        error: `Amount must be at least ${MIN_WITHDRAW_AMOUNT} USDC`,
+      });
+    }
+
+    const normalizedAddress = getAddress(address);
+    
+    // Determine destination
+    const withdrawToPool = toPool === true;
+    const destinationAddress = withdrawToPool ? normalizedAddress : (toAddress ? getAddress(toAddress) : normalizedAddress);
+    
+    // Validate toAddress only if not withdrawing to pool
+    if (!withdrawToPool) {
+      if (!destinationAddress || !isAddress(destinationAddress)) {
+        return res.status(400).json({ success: false, error: 'Invalid to address' });
+      }
+    }
+
+    // Get bot and verify ownership
+    const bot = await prisma.bot.findUnique({
+      where: { botId },
+      include: {
+        metrics: true,
+        keys: {
+          take: 1,
+        },
+      },
+    });
+
+    if (!bot) {
+      return res.status(404).json({ success: false, error: 'Bot not found' });
+    }
+
+    if (bot.creator.toLowerCase() !== normalizedAddress.toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        error: 'You can only withdraw from your own bots',
+      });
+    }
+
+    const botBalance = bot.metrics?.pnlUsd || 0;
+    if (botBalance < amount) {
+      return res.status(400).json({
+        success: false,
+        error: `Insufficient bot balance. Bot has $${botBalance.toFixed(2)} but tried to withdraw $${amount.toFixed(2)}`,
+      });
+    }
+
+    if (withdrawToPool) {
+      // Internal transfer to main pool (no on-chain transaction needed)
+      const user = await prisma.user.findUnique({
+        where: { polygonAddress: normalizedAddress },
+      });
+
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      // Update balances in a transaction
+      const [updatedMetrics, updatedUser] = await prisma.$transaction([
+        // Deduct from bot
+        prisma.botMetrics.update({
+          where: { botId },
+          data: {
+            pnlUsd: {
+              decrement: amount,
+            },
+          },
+        }),
+        // Add to user's main pool
+        prisma.user.update({
+          where: { polygonAddress: normalizedAddress },
+          data: {
+            usdcBalance: {
+              increment: amount,
+            },
+          },
+        }),
+      ]);
+
+      console.log(`💸 WITHDRAW TO POOL: $${amount} from bot ${botId} → user pool`);
+
+      res.json({
+        success: true,
+        data: {
+          amount,
+          toPool: true,
+          newBotBalance: updatedMetrics.pnlUsd,
+          newPoolBalance: updatedUser.usdcBalance,
+        },
+        message: `Successfully transferred ${amount} USDC from bot to your trading pool`,
+      });
+    } else {
+      // On-chain transfer to wallet
+      if (!bot.keys || bot.keys.length === 0 || !bot.keys[0].encryptedPrivKey) {
+        return res.status(400).json({
+          success: false,
+          error: 'Bot wallet not found',
+        });
+      }
+
+      // Decrypt bot wallet private key
+      const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+      let privateKey: string;
+      try {
+        privateKey = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+      } catch (err) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to decrypt bot wallet key',
+        });
+      }
+
+      // Get RPC provider
+      const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+      const provider = new JsonRpcProvider(rpcUrl);
+
+      // Create wallet and USDC contract
+      const wallet = new Wallet(privateKey, provider);
+      const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, wallet);
+
+      // Check on-chain balance
+      const onChainBalance = await usdcContract.balanceOf(wallet.address);
+      const onChainBalanceFormatted = parseFloat(formatUnits(onChainBalance, USDC_DECIMALS));
+
+      if (onChainBalanceFormatted < amount) {
+        return res.status(400).json({
+          success: false,
+          error: `Insufficient on-chain balance. Bot wallet has $${onChainBalanceFormatted.toFixed(2)} USDC`,
+        });
+      }
+
+      // Transfer USDC
+      const amountWei = parseUnits(amount.toFixed(USDC_DECIMALS), USDC_DECIMALS);
+      const tx = await usdcContract.transfer(destinationAddress, amountWei);
+      const receipt = await tx.wait();
+
+      // Update database balance
+      const updatedMetrics = await prisma.botMetrics.update({
+        where: { botId },
+        data: {
+          pnlUsd: {
+            decrement: amount,
+          },
+        },
+      });
+
+      logWithdraw(wallet.address, destinationAddress, amount, receipt.hash);
+
+      res.json({
+        success: true,
+        data: {
+          txHash: receipt.hash,
+          amount,
+          from: wallet.address,
+          to: destinationAddress,
+          toPool: false,
+          newBotBalance: updatedMetrics.pnlUsd,
+        },
+        message: `Successfully withdrew ${amount} USDC from bot to your wallet`,
+      });
+    }
+  } catch (error: any) {
+    console.error('Error withdrawing from bot:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to withdraw from bot',
+    });
+  }
+});
+
+export default router;

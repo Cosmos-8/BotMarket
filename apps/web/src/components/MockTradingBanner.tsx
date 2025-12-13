@@ -15,8 +15,8 @@ export function MockTradingBanner() {
           <span className="hidden sm:inline mx-2">—</span>
           <span className="hidden sm:inline">
             Live trading disabled for safe demo. Production version connects to{' '}
-            <span className="text-amber-100">Polymarket&apos;s CLOB</span> and{' '}
-            <span className="text-amber-100">Circle&apos;s CCTP</span> for USDC bridging.
+            <span className="text-amber-100">Polymarket&apos;s CLOB</span> on{' '}
+            <span className="text-amber-100">Polygon</span>.
           </span>
           <span className="sm:hidden"> Live trading disabled for safe demo.</span>
         </p>

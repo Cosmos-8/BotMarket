@@ -111,6 +111,16 @@ export default function TradingViewSetupPage() {
                   <li>Paste it into the webhook URL field</li>
                   <li>Format: <code className="bg-gray-100 px-2 py-1 rounded">https://your-api-url.com/webhook/YOUR_BOT_ID</code></li>
                 </ol>
+                <div className="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <p className="text-sm text-amber-800 mb-2">
+                    <strong>⚠️ Important:</strong> TradingView requires a publicly accessible URL (HTTPS or HTTP on port 80).
+                  </p>
+                  <p className="text-sm text-amber-700">
+                    <strong>For local development:</strong> Use <a href="https://ngrok.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">ngrok</a> to create a public tunnel:
+                    <code className="block bg-gray-100 px-2 py-1 rounded mt-1 text-xs">ngrok http 3001</code>
+                    Then set <code className="bg-gray-100 px-1 rounded text-xs">NEXT_PUBLIC_WEBHOOK_BASE_URL</code> to your ngrok URL.
+                  </p>
+                </div>
                 <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
                   <p className="text-sm text-blue-800">
                     <strong>Tip:</strong> You can find your bot's webhook URL on the bot detail page. Click "Copy" to copy it to your clipboard.

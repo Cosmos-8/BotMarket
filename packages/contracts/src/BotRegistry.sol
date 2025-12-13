@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 /**
  * @title BotRegistry
- * @notice Registry for bot creation and forking on Base
+ * @notice Registry for bot creation and forking on Polygon
  */
 contract BotRegistry {
     // Events

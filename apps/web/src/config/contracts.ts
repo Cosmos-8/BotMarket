@@ -1,27 +1,27 @@
- /**
+/**
  * Contract Configuration
  * 
  * Provides deployed contract addresses for the frontend.
  * 
  * After deploying contracts, update:
  * 1. NEXT_PUBLIC_BOT_REGISTRY_ADDRESS in apps/web/.env.local
- * 2. packages/contracts/deployments/baseMainnet.json
+ * 2. packages/contracts/deployments/polygonMainnet.json
  */
 
 // ============================================================================
 // Chain Configuration
 // ============================================================================
 
-export const BASE_CHAIN_ID = 8453;
+export const POLYGON_CHAIN_ID = 137;
 
-export const BLOCK_EXPLORER_URL = 'https://basescan.org';
+export const BLOCK_EXPLORER_URL = 'https://polygonscan.com';
 
 // ============================================================================
 // Contract Addresses
 // ============================================================================
 
 /**
- * BotRegistry contract address on Base Mainnet.
+ * BotRegistry contract address on Polygon Mainnet.
  * 
  * Set via environment variable after deployment:
  *   NEXT_PUBLIC_BOT_REGISTRY_ADDRESS=0x...
@@ -29,28 +29,28 @@ export const BLOCK_EXPLORER_URL = 'https://basescan.org';
  * To deploy:
  *   1. cd packages/contracts
  *   2. export PRIVATE_KEY=0x...
- *   3. pnpm deploy:base-mainnet
+ *   3. forge script script/DeployBotRegistry.s.sol --rpc-url https://polygon-rpc.com --broadcast --verify
  *   4. Copy the deployed address to .env.local
  */
 export const BOT_REGISTRY_ADDRESS: `0x${string}` | null = 
   (process.env.NEXT_PUBLIC_BOT_REGISTRY_ADDRESS as `0x${string}`) || null;
 
 /**
- * USDC Token on Base Mainnet.
+ * USDC Token on Polygon Mainnet.
  * 
- * Default: Circle's official USDC on Base Mainnet
+ * Default: Circle's official USDC on Polygon Mainnet (native USDC, not bridged)
  * Override via NEXT_PUBLIC_USDC_ADDRESS if needed.
  */
 export const USDC_ADDRESS: `0x${string}` = 
   (process.env.NEXT_PUBLIC_USDC_ADDRESS as `0x${string}`) || 
-  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+  '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
 
 /**
  * USDC Token Configuration
  */
 export const USDC_TOKEN = {
   address: USDC_ADDRESS,
-  chainId: BASE_CHAIN_ID,
+  chainId: POLYGON_CHAIN_ID,
   decimals: 6,
   symbol: 'USDC',
   name: 'USD Coin',
@@ -61,14 +61,14 @@ export const USDC_TOKEN = {
 // ============================================================================
 
 /**
- * Get BaseScan URL for a contract address.
+ * Get PolygonScan URL for a contract address.
  */
 export function getContractUrl(address: string): string {
   return `${BLOCK_EXPLORER_URL}/address/${address}`;
 }
 
 /**
- * Get BaseScan URL for a transaction hash.
+ * Get PolygonScan URL for a transaction hash.
  */
 export function getTransactionUrl(txHash: string): string {
   return `${BLOCK_EXPLORER_URL}/tx/${txHash}`;
@@ -181,7 +181,7 @@ export const BOT_REGISTRY_ABI = [
 ] as const;
 
 /**
- * Minimal ERC20 ABI for reading USDC balance.
+ * Minimal ERC20 ABI for USDC operations.
  */
 export const ERC20_ABI = [
   {
@@ -205,5 +205,34 @@ export const ERC20_ABI = [
     inputs: [],
     outputs: [{ type: 'string' }],
   },
+  {
+    name: 'transfer',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    name: 'approve',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    name: 'allowance',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
 ] as const;
-

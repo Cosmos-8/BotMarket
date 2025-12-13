@@ -13,7 +13,29 @@ const router: IRouter = Router();
 router.post('/:botId', async (req: Request, res: Response) => {
   try {
     const { botId } = req.params;
-    const payload = req.body;
+    let payload = req.body;
+
+    // TradingView sends the message in different formats
+    // Handle case where message is a JSON string that needs parsing
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        // If not JSON, treat as plain text message
+        payload = { message: payload };
+      }
+    }
+
+    // TradingView format: if there's a "message" field that's a JSON string, parse it
+    if (payload.message && typeof payload.message === 'string') {
+      try {
+        const parsedMessage = JSON.parse(payload.message);
+        // Merge parsed message into payload
+        payload = { ...payload, ...parsedMessage };
+      } catch {
+        // Message is not JSON, keep as is
+      }
+    }
 
     // Get bot and config
     const bot = await prisma.bot.findUnique({
@@ -64,7 +86,7 @@ router.post('/:botId', async (req: Request, res: Response) => {
     if (!parsedSignal) {
       return res.status(400).json({
         success: false,
-        error: 'No valid signal found. Expected: signal="LONG"|"SHORT"|"CLOSE", or message containing "long"/"short"',
+        error: 'No valid signal found. Expected: signal="LONG"|"SHORT"|"CLOSE", or message containing "LONG"/"SHORT"/"CLOSE"',
       });
     }
 

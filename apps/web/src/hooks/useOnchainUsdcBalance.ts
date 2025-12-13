@@ -3,13 +3,13 @@
 /**
  * On-Chain USDC Balance Hook
  * 
- * Reads the user's real USDC balance from Base.
+ * Reads the user's real USDC balance from Polygon.
  * This is a read-only hook that never throws in the UI.
  */
 
 import { useAccount, useReadContract, useChainId } from 'wagmi';
 import { formatUnits } from 'viem';
-import { baseSepolia } from 'wagmi/chains';
+import { polygon } from 'wagmi/chains';
 import {
   USDC_TOKEN,
   ERC20_ABI,
@@ -45,7 +45,7 @@ export interface OnchainUsdcBalanceState {
 // ============================================================================
 
 /**
- * Hook to read the user's on-chain USDC balance from Base.
+ * Hook to read the user's on-chain USDC balance from Polygon.
  * 
  * Usage:
  * ```tsx
@@ -62,8 +62,8 @@ export function useOnchainUsdcBalance(): OnchainUsdcBalanceState {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   
-  // Check if wallet is ready (connected + correct chain)
-  const isCorrectChain = chainId === baseSepolia.id;
+  // Check if wallet is ready (connected + correct chain - Polygon)
+  const isCorrectChain = chainId === polygon.id;
   const isWalletReady = isConnected && isCorrectChain && !!address;
 
   // Read balance from USDC contract
@@ -78,7 +78,7 @@ export function useOnchainUsdcBalance(): OnchainUsdcBalanceState {
     abi: ERC20_ABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
-    chainId: baseSepolia.id,
+    chainId: polygon.id,
     query: {
       enabled: isWalletReady,
       staleTime: 30_000, // Cache for 30 seconds
@@ -138,4 +138,3 @@ export function useOnchainUsdcBalance(): OnchainUsdcBalanceState {
 }
 
 export default useOnchainUsdcBalance;
-

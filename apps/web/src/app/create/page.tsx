@@ -65,7 +65,7 @@ function OnChainStatus({
               On-chain registration skipped
             </p>
             <p className="text-sm text-zinc-400 mt-1">
-              {unavailableReason || 'Connect wallet to Base to register this bot on-chain.'}
+              {unavailableReason || 'Connect wallet to Polygon to register this bot on-chain.'}
             </p>
           </div>
         </div>
@@ -80,7 +80,7 @@ function OnChainStatus({
           <div className="animate-spin w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full"></div>
           <div>
             <p className="text-sm font-medium text-blue-300">
-              Registering on Base...
+              Registering on Polygon...
             </p>
             <p className="text-sm text-blue-200/70 mt-1">
               Please confirm the transaction in your wallet
@@ -110,7 +110,7 @@ function OnChainStatus({
                 rel="noopener noreferrer"
                 className="text-xs text-blue-400 hover:text-blue-300 mt-1 inline-block"
               >
-                View on BaseScan →
+                View on PolygonScan →
               </a>
             )}
           </div>
@@ -126,10 +126,10 @@ function OnChainStatus({
           <span className="text-emerald-400 text-lg">✅</span>
           <div>
             <p className="text-sm font-medium text-emerald-300">
-              Bot registered on Base!
+              Bot registered on Polygon!
             </p>
             <p className="text-sm text-emerald-200/70 mt-1">
-              Transaction confirmed on Base
+              Transaction confirmed on Polygon
             </p>
             {txUrl && (
               <a
@@ -138,7 +138,7 @@ function OnChainStatus({
                 rel="noopener noreferrer"
                 className="text-sm text-emerald-400 hover:text-emerald-300 mt-2 inline-flex items-center"
               >
-                View on BaseScan
+                View on PolygonScan
                 <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                 </svg>
@@ -372,7 +372,7 @@ export default function CreateBotPage() {
               <ul className="text-xs text-zinc-400 space-y-1.5">
                 <li className="flex items-start space-x-2">
                   <span className="text-purple-400">1.</span>
-                  <span>Connect your wallet (Base)</span>
+                  <span>Connect your wallet (Polygon)</span>
                 </li>
                 <li className="flex items-start space-x-2">
                   <span className="text-purple-400">2.</span>
@@ -402,7 +402,7 @@ export default function CreateBotPage() {
               </span>
               <span className="text-zinc-500">•</span>
               <span className="text-zinc-400 text-xs">
-                Bot will be registered on Base
+                Bot will be registered on Polygon
               </span>
             </div>
 
@@ -586,7 +586,7 @@ export default function CreateBotPage() {
                     On-chain registration
                   </p>
                   <p className="text-sm text-blue-200/70 mt-1">
-                    After creating, you&apos;ll be prompted to register this bot on Base. 
+                    After creating, you&apos;ll be prompted to register this bot on Polygon. 
                     This creates a verifiable on-chain record of your bot.
                   </p>
                 </div>

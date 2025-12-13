@@ -65,10 +65,10 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     // Generate bot ID (will be replaced with on-chain botId later)
     const botId = `bot_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    // Create or get user
+    // Create or get user (using Polygon address)
     const user = await prisma.user.upsert({
-      where: { baseAddress: creator },
-      create: { baseAddress: creator },
+      where: { polygonAddress: creator },
+      create: { polygonAddress: creator },
       update: {},
     });
 
@@ -81,7 +81,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
     const encryptedKey = encryptPrivateKey(proxyPrivateKey, encryptionSecret);
 
-    // Create bot with proxy wallet
+    // Create bot with proxy wallet (isActive defaults to false)
     const bot = await prisma.bot.create({
       data: {
         botId,
@@ -89,6 +89,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         visibility: body.visibility,
         metadataURI: body.metadataURI || null,
         configHash,
+        isActive: false, // Bot starts inactive, user must explicitly start it
         configs: {
           create: {
             configJSON: config as any,
@@ -123,12 +124,13 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         creator: bot.creator,
         visibility: bot.visibility,
         configHash: bot.configHash,
+        isActive: bot.isActive,
         createdAt: bot.createdAt,
         // Return proxy wallet address so user can fund it
         proxyWallet: {
           address: proxyAddress,
           network: 'Polygon',
-          note: 'Fund this wallet with USDC and MATIC to enable live trading',
+          note: 'Fund this wallet with USDC to enable live trading, then click Start',
         },
       },
     });
@@ -210,6 +212,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
         creator: bot.creator,
         parentBotId: bot.parentBotId,
         visibility: bot.visibility,
+        isActive: bot.isActive,
         metrics: bot.metrics,
         forkCount: bot._count.forkedBots,
         createdAt: bot.createdAt,
@@ -289,6 +292,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
         visibility: bot.visibility,
         metadataURI: bot.metadataURI,
         configHash: bot.configHash,
+        isActive: bot.isActive,
         config: bot.configs[0]?.configJSON,
         metrics: bot.metrics,
         recentOrders: bot.orders,
@@ -298,7 +302,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
         proxyWallet: proxyWalletAddress ? {
           address: proxyWalletAddress,
           network: 'Polygon',
-          note: 'Fund this wallet with USDC and MATIC to enable live trading',
+          note: 'Fund this wallet with USDC to enable live trading',
         } : null,
       },
     });
@@ -307,6 +311,110 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get bot',
+    });
+  }
+});
+
+/**
+ * POST /bots/:id/start
+ * Start a bot (enable trading)
+ */
+router.post('/:id/start', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const bot = await prisma.bot.findUnique({
+      where: { botId: id },
+    });
+
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found',
+      });
+    }
+
+    if (bot.isActive) {
+      return res.json({
+        success: true,
+        message: 'Bot is already active',
+        data: { botId: id, isActive: true },
+      });
+    }
+
+    // Update bot to active
+    const updatedBot = await prisma.bot.update({
+      where: { botId: id },
+      data: { isActive: true },
+    });
+
+    console.log(`▶️ Bot ${id} started by user`);
+
+    res.json({
+      success: true,
+      message: 'Bot started successfully',
+      data: {
+        botId: updatedBot.botId,
+        isActive: updatedBot.isActive,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error starting bot:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to start bot',
+    });
+  }
+});
+
+/**
+ * POST /bots/:id/stop
+ * Stop a bot (disable trading)
+ */
+router.post('/:id/stop', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const bot = await prisma.bot.findUnique({
+      where: { botId: id },
+    });
+
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found',
+      });
+    }
+
+    if (!bot.isActive) {
+      return res.json({
+        success: true,
+        message: 'Bot is already stopped',
+        data: { botId: id, isActive: false },
+      });
+    }
+
+    // Update bot to inactive
+    const updatedBot = await prisma.bot.update({
+      where: { botId: id },
+      data: { isActive: false },
+    });
+
+    console.log(`⏹️ Bot ${id} stopped by user`);
+
+    res.json({
+      success: true,
+      message: 'Bot stopped successfully',
+      data: {
+        botId: updatedBot.botId,
+        isActive: updatedBot.isActive,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error stopping bot:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to stop bot',
     });
   }
 });
@@ -347,12 +455,20 @@ router.post('/:id/fork', verifyWallet, async (req: AuthenticatedRequest, res: Re
     // Generate new bot ID
     const newBotId = `bot_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    // Create or get user
+    // Create or get user (using Polygon address)
     const user = await prisma.user.upsert({
-      where: { baseAddress: forker },
-      create: { baseAddress: forker },
+      where: { polygonAddress: forker },
+      create: { polygonAddress: forker },
       update: {},
     });
+
+    // Generate a proxy wallet for the forked bot
+    const proxyWallet = Wallet.createRandom();
+    const proxyAddress = proxyWallet.address;
+    const proxyPrivateKey = proxyWallet.privateKey;
+
+    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+    const encryptedKey = encryptPrivateKey(proxyPrivateKey, encryptionSecret);
 
     // Create forked bot
     const forkedBot = await prisma.bot.create({
@@ -363,16 +479,23 @@ router.post('/:id/fork', verifyWallet, async (req: AuthenticatedRequest, res: Re
         visibility: parentBot.visibility, // Inherit visibility
         metadataURI: body.metadataURI || null,
         configHash,
+        isActive: false, // Forked bots start inactive
         configs: {
           create: {
             configJSON: validatedConfig as any,
             version: validatedConfig.version,
           },
         },
+        keys: {
+          create: {
+            encryptedPrivKey: encryptedKey,
+            keyVersion: '1.0',
+          },
+        },
       },
     });
 
-    // TODO: Emit BotForked event on Base contract
+    console.log(`🍴 Bot ${id} forked to ${newBotId} by ${forker}`);
 
     res.json({
       success: true,
@@ -381,7 +504,13 @@ router.post('/:id/fork', verifyWallet, async (req: AuthenticatedRequest, res: Re
         parentBotId: id,
         creator: forkedBot.creator,
         configHash: forkedBot.configHash,
+        isActive: forkedBot.isActive,
         createdAt: forkedBot.createdAt,
+        proxyWallet: {
+          address: proxyAddress,
+          network: 'Polygon',
+          note: 'Fund this wallet with USDC to enable live trading',
+        },
       },
     });
   } catch (error: any) {
@@ -546,4 +675,3 @@ router.post('/:id/test-signal', async (req: AuthenticatedRequest, res: Response)
 });
 
 export default router;
-

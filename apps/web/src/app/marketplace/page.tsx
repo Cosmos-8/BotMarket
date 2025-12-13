@@ -317,7 +317,7 @@ export default function MarketplacePage() {
                 rel="noopener noreferrer"
                 className="text-sm text-accent hover:text-accent-hover font-medium transition-colors"
               >
-                View on BaseScan ↗
+                View on PolygonScan ↗
               </a>
             </div>
           )}

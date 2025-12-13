@@ -1,0 +1,13 @@
+{
+  "network": "polygon_mainnet",
+  "chainId": 137,
+  "contracts": {
+    "BotRegistry": {
+      "address": "0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958",
+      "deployedAt": "2025-12-13T21:50:00Z",
+      "deploymentTxHash": "0xb692b7007ecb817f95767f408447023a5f3d2e6ada5e22cdb20dc9c790fe85f2"
+    }
+  },
+  "notes": "Deploy using: forge script script/DeployBotRegistry.s.sol --rpc-url https://polygon-rpc.com --broadcast --verify"
+}
+

@@ -70,9 +70,9 @@ export default function Home() {
                     <span className="text-3xl">⛓️</span>
                   </div>
                   <div>
-                    <h3 className="text-xl font-semibold text-white">Built on Base</h3>
+                    <h3 className="text-xl font-semibold text-white">Built on Polygon</h3>
                     <p className="text-zinc-400 text-sm">
-                      Bot registry deployed on Base Mainnet
+                      Bot registry deployed on Polygon
                     </p>
                   </div>
                 </div>
@@ -92,7 +92,7 @@ export default function Home() {
                         rel="noopener noreferrer"
                         className="px-4 py-2 bg-accent text-white rounded-lg font-medium text-sm hover:bg-accent-hover transition-colors"
                       >
-                        View on BaseScan ↗
+                        View on PolygonScan ↗
                       </a>
                     </>
                   ) : (
@@ -156,7 +156,7 @@ export default function Home() {
           </h2>
           <div className="grid md:grid-cols-4 gap-8">
             {[
-              { step: 1, title: 'Connect Wallet', desc: 'Connect your Base wallet to get started' },
+              { step: 1, title: 'Connect Wallet', desc: 'Connect your Polygon wallet to get started' },
               { step: 2, title: 'Create Bot', desc: 'Choose market, timeframe, and risk settings' },
               { step: 3, title: 'Connect TradingView', desc: 'Add webhook URL to your alerts' },
               { step: 4, title: 'Watch It Trade', desc: 'Bot executes trades and tracks performance' },

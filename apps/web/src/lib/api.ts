@@ -60,6 +60,16 @@ export async function deleteBot(botId: string) {
   return response.data;
 }
 
+export async function startBot(botId: string) {
+  const response = await api.post(`/bots/${botId}/start`);
+  return response.data;
+}
+
+export async function stopBot(botId: string) {
+  const response = await api.post(`/bots/${botId}/stop`);
+  return response.data;
+}
+
 export async function getBotSignals(botId: string, limit = 20) {
   const response = await api.get(`/bots/${botId}/signals`, { params: { limit } });
   return response.data;
@@ -105,6 +115,16 @@ export async function fundBalance(address: string, amount: number) {
 
 export async function allocateToBot(address: string, botId: string, amount: number) {
   const response = await api.post('/balance/allocate-to-bot', { address, botId, amount });
+  return response.data;
+}
+
+export async function withdrawBalance(address: string, amount: number, toAddress: string) {
+  const response = await api.post('/balance/withdraw', { address, amount, toAddress });
+  return response.data;
+}
+
+export async function withdrawFromBot(address: string, botId: string, amount: number, toAddress?: string, toPool?: boolean) {
+  const response = await api.post(`/balance/bot/${botId}/withdraw`, { address, amount, toAddress, toPool });
   return response.data;
 }
 

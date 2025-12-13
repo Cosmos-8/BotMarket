@@ -3,79 +3,22 @@
 /**
  * USDC Balance Panel Component
  * 
- * Full CCTP integration for depositing/withdrawing USDC:
- * 1. User deposits USDC on Base
- * 2. Platform bridges via CCTP to Polygon
- * 3. User can trade on Polymarket
- * 4. User withdraws back to Base
+ * Direct USDC deposits on Polygon:
+ * 1. User connects wallet on Polygon
+ * 2. User deposits USDC directly to their proxy wallet
+ * 3. User can allocate to bots for trading
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@/hooks/useWallet';
+import { useOnchainUsdcBalance } from '@/hooks/useOnchainUsdcBalance';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
-import { parseUnits, formatUnits } from 'viem';
+import { parseUnits } from 'viem';
+import { USDC_ADDRESS, ERC20_ABI } from '@/config/contracts';
+import { getBalance, fundBalance, withdrawBalance } from '@/lib/api';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-
-// USDC ABI for approve and transfer
-const ERC20_ABI = [
-  {
-    name: 'approve',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ type: 'bool' }],
-  },
-  {
-    name: 'transfer',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ type: 'bool' }],
-  },
-  {
-    name: 'allowance',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'owner', type: 'address' },
-      { name: 'spender', type: 'address' },
-    ],
-    outputs: [{ type: 'uint256' }],
-  },
-] as const;
-
-// ============================================================================
-// Types
-// ============================================================================
-
-interface BridgeConfig {
-  base: { chainId: number; usdc: string };
-  polygon: { chainId: number; usdc: string };
-  platformWallet: string | null;
-  minDeposit: number;
-}
-
-interface Balances {
-  base: { balance: number };
-  polygon: { balance: number; proxyAddress: string | null };
-  pending: { deposits: number; withdrawals: number };
-}
-
-interface BridgeTransaction {
-  id: string;
-  amount: number;
-  direction: string;
-  status: string;
-  createdAt: string;
-}
 
 // ============================================================================
 // USDC Icon Component
@@ -95,92 +38,48 @@ function UsdcIcon({ size = 'md' }: { size?: 'sm' | 'md' }) {
 // ============================================================================
 
 export function UsdcBalancePanel() {
-  const { isConnected } = useWallet();
+  const { isConnected, isCorrectChain } = useWallet();
   const { address } = useAccount();
+  const { onchainBalance, refetch: refetchOnchainBalance } = useOnchainUsdcBalance();
   
   // State
-  const [bridgeConfig, setBridgeConfig] = useState<BridgeConfig | null>(null);
-  const [balances, setBalances] = useState<Balances | null>(null);
-  const [pendingTxs, setPendingTxs] = useState<BridgeTransaction[]>([]);
+  const [proxyWallet, setProxyWallet] = useState<{ address: string; isNew: boolean } | null>(null);
+  const [poolBalance, setPoolBalance] = useState<number>(0);
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [isDepositing, setIsDepositing] = useState(false);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
-  const [depositStep, setDepositStep] = useState<'idle' | 'approving' | 'transferring' | 'bridging'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Contract write hooks
-  const { writeContract: approveUsdc, data: approveHash, error: approveError, reset: resetApprove } = useWriteContract();
-  const { writeContract: transferUsdc, data: transferHash, error: transferError, reset: resetTransfer } = useWriteContract();
+  // Contract write hook for USDC transfer
+  const { 
+    writeContract: transferUsdc, 
+    data: transferHash, 
+    error: transferError,
+    isPending: isTransferPending,
+    reset: resetTransfer 
+  } = useWriteContract();
   
-  const { isLoading: isApproving, isSuccess: approveSuccess, isError: approveReceiptError } = useWaitForTransactionReceipt({
-    hash: approveHash,
-  });
-  
-  const { isLoading: isTransferring, isSuccess: transferSuccess, isError: transferReceiptError } = useWaitForTransactionReceipt({
+  const { 
+    isLoading: isConfirming, 
+    isSuccess: isTransferConfirmed,
+  } = useWaitForTransactionReceipt({
     hash: transferHash,
   });
 
-  // Handle wallet errors
-  useEffect(() => {
-    if (approveError) {
-      console.error('Approve error:', approveError);
-      setError(approveError.message.includes('User rejected') 
-        ? 'Transaction cancelled by user' 
-        : `Approval failed: ${approveError.message.slice(0, 100)}`);
-      setIsDepositing(false);
-      setDepositStep('idle');
-      resetApprove();
-    }
-  }, [approveError, resetApprove]);
-
-  useEffect(() => {
-    if (transferError) {
-      console.error('Transfer error:', transferError);
-      setError(transferError.message.includes('User rejected')
-        ? 'Transaction cancelled by user'
-        : `Transfer failed: ${transferError.message.slice(0, 100)}`);
-      setIsDepositing(false);
-      setDepositStep('idle');
-      resetTransfer();
-    }
-  }, [transferError, resetTransfer]);
-
-  useEffect(() => {
-    if (approveReceiptError || transferReceiptError) {
-      setError('Transaction failed on-chain. Please try again.');
-      setIsDepositing(false);
-      setDepositStep('idle');
-    }
-  }, [approveReceiptError, transferReceiptError]);
-
-  // Load bridge config
-  useEffect(() => {
-    async function loadConfig() {
-      try {
-        const res = await fetch(`${API_URL}/bridge/config`);
-        const data = await res.json();
-        if (data.success) {
-          setBridgeConfig(data.data);
-        }
-      } catch (err) {
-        console.error('Error loading bridge config:', err);
-      }
-    }
-    loadConfig();
-  }, []);
-
-  // Load balances
+  // Load user's proxy wallet and pool balance
   const loadBalances = useCallback(async () => {
     if (!address) return;
     setIsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/bridge/balance/${address}`);
-      const data = await res.json();
-      if (data.success) {
-        setBalances(data.data);
+      const result = await getBalance(address);
+      if (result.success) {
+        setPoolBalance(result.data.usdcBalance || 0);
+        if (result.data.proxyWallet) {
+          setProxyWallet(result.data.proxyWallet);
+        }
       }
     } catch (err) {
       console.error('Error loading balances:', err);
@@ -189,54 +88,53 @@ export function UsdcBalancePanel() {
     }
   }, [address]);
 
-  // Load pending transactions
-  const loadPendingTxs = useCallback(async () => {
-    if (!address) return;
-    try {
-      const res = await fetch(`${API_URL}/bridge/history/${address}?limit=5`);
-      const data = await res.json();
-      if (data.success) {
-        setPendingTxs(data.data.filter((tx: BridgeTransaction) => 
-          !['completed', 'failed'].includes(tx.status)
-        ));
-      }
-    } catch (err) {
-      console.error('Error loading pending txs:', err);
-    }
-  }, [address]);
-
   useEffect(() => {
     loadBalances();
-    loadPendingTxs();
-  }, [loadBalances, loadPendingTxs]);
+  }, [loadBalances]);
 
-  // Poll for updates when there are pending transactions
+  // Handle transfer errors
   useEffect(() => {
-    if (pendingTxs.length > 0) {
-      const interval = setInterval(() => {
-        loadBalances();
-        loadPendingTxs();
-      }, 10000); // Every 10 seconds
-      return () => clearInterval(interval);
+    if (transferError) {
+      console.error('Transfer error:', transferError);
+      setError(
+        (transferError as any).shortMessage || 
+        (transferError.message.includes('User rejected') 
+          ? 'Transaction cancelled' 
+          : `Transfer failed: ${transferError.message.slice(0, 100)}`)
+      );
+      setIsDepositing(false);
+      resetTransfer();
     }
-  }, [pendingTxs.length, loadBalances, loadPendingTxs]);
+  }, [transferError, resetTransfer]);
+
+  // Handle transfer success - update backend balance
+  useEffect(() => {
+    if (isTransferConfirmed && transferHash && isDepositing) {
+      const amount = parseFloat(depositAmount);
+      
+      // Update backend with the deposit
+      (async () => {
+        try {
+          await fundBalance(address!, amount);
+          setSuccess(`Successfully deposited ${amount} USDC to your trading pool!`);
+          setDepositAmount('');
+          loadBalances();
+          refetchOnchainBalance();
+        } catch (err) {
+          console.error('Error updating backend:', err);
+          setError('Deposit confirmed but failed to update balance. Please refresh.');
+        } finally {
+          setIsDepositing(false);
+          resetTransfer();
+        }
+      })();
+    }
+  }, [isTransferConfirmed, transferHash, isDepositing, depositAmount, address, loadBalances, refetchOnchainBalance, resetTransfer]);
 
   // Handle deposit
   const handleDeposit = async () => {
-    console.log('[Deposit] Starting deposit flow');
-    console.log('[Deposit] Address:', address);
-    console.log('[Deposit] Platform wallet:', bridgeConfig?.platformWallet);
-    console.log('[Deposit] Amount:', depositAmount);
-    console.log('[Deposit] Balances:', balances);
-
-    if (!address) {
+    if (!address || !proxyWallet) {
       setError('Please connect your wallet');
-      return;
-    }
-    
-    if (!bridgeConfig?.platformWallet) {
-      setError('Platform not configured. Please contact support.');
-      console.error('[Deposit] Platform wallet not configured in bridge config');
       return;
     }
     
@@ -251,8 +149,9 @@ export function UsdcBalancePanel() {
       return;
     }
 
-    if (!balances || balances.base.balance < amount) {
-      setError(`Insufficient USDC on Base. You have ${balances?.base.balance.toFixed(2) || '0'} USDC. You need to get USDC on Base first.`);
+    const walletBalance = parseFloat(onchainBalance);
+    if (walletBalance < amount) {
+      setError(`Insufficient USDC. You have ${onchainBalance} USDC in your wallet.`);
       return;
     }
 
@@ -261,145 +160,26 @@ export function UsdcBalancePanel() {
     setSuccess(null);
 
     try {
-      // Step 1: Create deposit request
-      console.log('[Deposit] Creating deposit request...');
-      const createRes = await fetch(`${API_URL}/bridge/deposit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address, amount }),
-      });
-      const createData = await createRes.json();
-      console.log('[Deposit] Create response:', createData);
-      
-      if (!createData.success) {
-        throw new Error(createData.error || 'Failed to create deposit');
-      }
-
-      const bridgeId = createData.data.bridgeId;
-      const amountWei = parseUnits(amount.toString(), 6);
-
-      // Step 2: Approve USDC
-      console.log('[Deposit] Requesting USDC approval...');
-      console.log('[Deposit] USDC contract:', bridgeConfig.base.usdc);
-      console.log('[Deposit] Spender:', bridgeConfig.platformWallet);
-      console.log('[Deposit] Amount (wei):', amountWei.toString());
-      
-      setDepositStep('approving');
-      approveUsdc({
-        address: bridgeConfig.base.usdc as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: 'approve',
-        args: [bridgeConfig.platformWallet as `0x${string}`, amountWei],
-      });
-
-    } catch (err: any) {
-      console.error('[Deposit] Error:', err);
-      setError(err.message || 'Deposit failed');
-      setIsDepositing(false);
-      setDepositStep('idle');
-    }
-  };
-
-  // Handle approve success - proceed to transfer
-  useEffect(() => {
-    if (approveSuccess && depositStep === 'approving' && bridgeConfig?.platformWallet) {
-      setDepositStep('transferring');
-      const amount = parseFloat(depositAmount);
       const amountWei = parseUnits(amount.toString(), 6);
       
+      // Transfer USDC to proxy wallet
       transferUsdc({
-        address: bridgeConfig.base.usdc as `0x${string}`,
+        address: USDC_ADDRESS,
         abi: ERC20_ABI,
         functionName: 'transfer',
-        args: [bridgeConfig.platformWallet as `0x${string}`, amountWei],
+        args: [proxyWallet.address as `0x${string}`, amountWei],
       });
-    }
-  }, [approveSuccess, depositStep, bridgeConfig, depositAmount, transferUsdc]);
-
-  // Handle transfer success - confirm deposit
-  useEffect(() => {
-    if (transferSuccess && depositStep === 'transferring' && transferHash) {
-      setDepositStep('bridging');
-      
-      // Confirm deposit with API
-      (async () => {
-        try {
-          // Get the latest bridge ID from pending txs or create new
-          const res = await fetch(`${API_URL}/bridge/history/${address}?limit=1`);
-          const data = await res.json();
-          const latestTx = data.data?.[0];
-          
-          if (latestTx && latestTx.status === 'pending') {
-            await fetch(`${API_URL}/bridge/deposit/confirm`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                bridgeId: latestTx.id, 
-                txHash: transferHash 
-              }),
-            });
-          }
-          
-          setSuccess(`Deposit initiated! Your ${depositAmount} USDC is being bridged to Polygon. This takes ~10-15 minutes.`);
-          setDepositAmount('');
-          loadBalances();
-          loadPendingTxs();
-        } catch (err) {
-          console.error('Error confirming deposit:', err);
-        } finally {
-          setIsDepositing(false);
-          setDepositStep('idle');
-        }
-      })();
-    }
-  }, [transferSuccess, depositStep, transferHash, address, depositAmount, loadBalances, loadPendingTxs]);
-
-  // Handle withdraw
-  const handleWithdraw = async () => {
-    if (!address || !withdrawAmount) return;
-    
-    const amount = parseFloat(withdrawAmount);
-    if (isNaN(amount) || amount < 1) {
-      setError('Minimum withdrawal is 1 USDC');
-      return;
-    }
-
-    if (balances && amount > balances.polygon.balance) {
-      setError(`Insufficient balance. You have ${balances.polygon.balance.toFixed(2)} USDC on Polygon.`);
-      return;
-    }
-
-    setIsWithdrawing(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const res = await fetch(`${API_URL}/bridge/withdraw`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address, amount }),
-      });
-      const data = await res.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to initiate withdrawal');
-      }
-
-      setSuccess(`Withdrawal initiated! Your ${amount} USDC is being bridged to Base. This takes ~10-15 minutes.`);
-      setWithdrawAmount('');
-      loadBalances();
-      loadPendingTxs();
     } catch (err: any) {
-      setError(err.message || 'Withdrawal failed');
-    } finally {
-      setIsWithdrawing(false);
+      console.error('Deposit error:', err);
+      setError(err.message || 'Deposit failed');
+      setIsDepositing(false);
     }
   };
 
   // Not connected state
   if (!isConnected) {
     return (
-      <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-5">
+      <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-5">
         <div className="flex items-center space-x-3 mb-4">
           <UsdcIcon />
           <div className="flex-1">
@@ -412,10 +192,26 @@ export function UsdcBalancePanel() {
     );
   }
 
-  // Loading state
-  if (isLoading && !balances) {
+  // Wrong chain state
+  if (!isCorrectChain) {
     return (
-      <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-5">
+      <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-5">
+        <div className="flex items-center space-x-3 mb-4">
+          <UsdcIcon />
+          <div className="flex-1">
+            <h3 className="font-semibold text-white">USDC Trading Pool</h3>
+            <p className="text-xs text-amber-400">Please switch to Polygon network</p>
+          </div>
+        </div>
+        <ConnectButton />
+      </div>
+    );
+  }
+
+  // Loading state
+  if (isLoading && !proxyWallet) {
+    return (
+      <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-5">
         <div className="flex items-center space-x-3 mb-4">
           <UsdcIcon />
           <div className="flex-1">
@@ -425,75 +221,55 @@ export function UsdcBalancePanel() {
         </div>
         <div className="animate-pulse space-y-3">
           <div className="h-20 bg-dark-600 rounded-xl"></div>
-          <div className="h-20 bg-dark-600 rounded-xl"></div>
         </div>
       </div>
     );
   }
 
+  const isProcessing = isDepositing || isTransferPending || isConfirming;
+
   return (
-    <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-5">
+    <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-5">
       {/* Header */}
       <div className="flex items-center space-x-3 mb-4">
         <UsdcIcon />
         <div className="flex-1">
           <div className="flex items-center space-x-2">
             <h3 className="font-semibold text-white">USDC Trading Pool</h3>
-            <span className="px-1.5 py-0.5 bg-[#2775CA]/20 text-[#2775CA] text-[10px] font-medium rounded">
-              CCTP Bridge
+            <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 text-[10px] font-medium rounded">
+              Polygon
             </span>
           </div>
-          <p className="text-xs text-zinc-500">Deposit from Base, trade on Polygon</p>
+          <p className="text-xs text-zinc-500">Deposit USDC to fund your bots</p>
         </div>
       </div>
 
       {/* Balances Grid */}
       <div className="grid grid-cols-2 gap-3 mb-4">
-        {/* Base Balance */}
-        <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+        {/* Wallet Balance */}
+        <div className="p-4 bg-dark-700/60 border border-white/5 rounded-xl">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-zinc-400">Base</span>
-            <span className="text-[10px] text-blue-400">Source</span>
+            <span className="text-xs text-zinc-400">Wallet</span>
+            <span className="text-[10px] text-zinc-500">On-chain</span>
           </div>
           <p className="text-xl font-bold text-white">
-            {balances?.base.balance.toFixed(2) || '0.00'}
+            {onchainBalance}
             <span className="text-sm text-zinc-500 ml-1">USDC</span>
           </p>
         </div>
 
-        {/* Polygon Balance */}
+        {/* Pool Balance */}
         <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-xl">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-zinc-400">Polygon</span>
-            <span className="text-[10px] text-emerald-400">Trading</span>
+            <span className="text-xs text-zinc-400">Trading Pool</span>
+            <span className="text-[10px] text-emerald-400">Ready</span>
           </div>
           <p className="text-xl font-bold text-white">
-            {balances?.polygon.balance.toFixed(2) || '0.00'}
+            {poolBalance.toFixed(2)}
             <span className="text-sm text-zinc-500 ml-1">USDC</span>
           </p>
         </div>
       </div>
-
-      {/* Pending Transactions */}
-      {pendingTxs.length > 0 && (
-        <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-          <div className="flex items-center space-x-2 mb-2">
-            <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse"></div>
-            <span className="text-xs text-amber-400 font-medium">Bridging in Progress</span>
-          </div>
-          {pendingTxs.map(tx => (
-            <div key={tx.id} className="flex items-center justify-between text-xs">
-              <span className="text-zinc-400">
-                {tx.direction === 'deposit' ? 'Deposit' : 'Withdrawal'}: ${tx.amount}
-              </span>
-              <span className="text-amber-400 capitalize">{tx.status}</span>
-            </div>
-          ))}
-          <p className="text-[10px] text-zinc-500 mt-2">
-            CCTP bridges take ~10-15 minutes. Balances update automatically.
-          </p>
-        </div>
-      )}
 
       {/* Error/Success Messages */}
       {error && (
@@ -511,7 +287,7 @@ export function UsdcBalancePanel() {
       <div className="mb-4 p-4 bg-dark-700/60 border border-white/5 rounded-xl">
         <h4 className="text-sm font-medium text-white mb-3 flex items-center space-x-2">
           <span>📥</span>
-          <span>Deposit (Base → Polygon)</span>
+          <span>Deposit USDC</span>
         </h4>
         
         <div className="flex space-x-2 mb-3">
@@ -522,23 +298,19 @@ export function UsdcBalancePanel() {
               value={depositAmount}
               onChange={(e) => setDepositAmount(e.target.value)}
               placeholder="Amount"
-              disabled={isDepositing}
-              className="w-full pl-7 pr-4 py-2.5 bg-dark-600 border border-white/10 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500/50 disabled:opacity-50"
+              disabled={isProcessing}
+              className="w-full pl-7 pr-4 py-2.5 bg-dark-600 border border-white/10 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500/50 disabled:opacity-50"
             />
           </div>
           <button
             onClick={handleDeposit}
-            disabled={isDepositing || !depositAmount || !bridgeConfig?.platformWallet}
-            className="px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={isProcessing || !depositAmount || !proxyWallet}
+            className="px-4 py-2.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isDepositing ? (
+            {isProcessing ? (
               <span className="flex items-center space-x-2">
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>
-                  {depositStep === 'approving' && 'Approving...'}
-                  {depositStep === 'transferring' && 'Transferring...'}
-                  {depositStep === 'bridging' && 'Bridging...'}
-                </span>
+                <span>{isConfirming ? 'Confirming...' : 'Depositing...'}</span>
               </span>
             ) : (
               'Deposit'
@@ -552,82 +324,107 @@ export function UsdcBalancePanel() {
             <button
               key={amt}
               onClick={() => setDepositAmount(amt.toString())}
-              disabled={isDepositing || (balances?.base.balance || 0) < amt}
+              disabled={isProcessing || parseFloat(onchainBalance) < amt}
               className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
             >
               ${amt}
             </button>
           ))}
         </div>
+
+        <p className="text-[10px] text-zinc-500 mt-3">
+          Transfer USDC from your wallet to your trading pool. From there, allocate to individual bots.
+        </p>
       </div>
 
-      {/* Withdraw Section */}
-      <div className="mb-4 p-4 bg-dark-700/60 border border-white/5 rounded-xl">
-        <h4 className="text-sm font-medium text-white mb-3 flex items-center space-x-2">
-          <span>📤</span>
-          <span>Withdraw (Polygon → Base)</span>
-        </h4>
-        
-        <div className="flex space-x-2 mb-3">
-          <div className="flex-1 relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">$</span>
-            <input
-              type="number"
-              value={withdrawAmount}
-              onChange={(e) => setWithdrawAmount(e.target.value)}
-              placeholder="Amount"
-              disabled={isWithdrawing}
-              className="w-full pl-7 pr-4 py-2.5 bg-dark-600 border border-white/10 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500/50 disabled:opacity-50"
-            />
-          </div>
-          <button
-            onClick={handleWithdraw}
-            disabled={isWithdrawing || !withdrawAmount || (balances?.polygon.balance || 0) === 0}
-            className="px-4 py-2.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isWithdrawing ? (
-              <span className="flex items-center space-x-2">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>Processing...</span>
-              </span>
-            ) : (
-              'Withdraw'
-            )}
-          </button>
-        </div>
-
-        {/* Quick amounts */}
-        <div className="flex space-x-2">
-          {[10, 25, 50].map((amt) => (
+      {/* Withdrawal Section */}
+      {poolBalance > 0 && (
+        <div className="mb-4 p-4 bg-dark-700/60 border border-white/5 rounded-xl">
+          <h4 className="text-sm font-medium text-white mb-3 flex items-center space-x-2">
+            <span>📤</span>
+            <span>Withdraw USDC</span>
+          </h4>
+          
+          <div className="flex space-x-2 mb-3">
+            <div className="flex-1 relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">$</span>
+              <input
+                type="number"
+                value={withdrawAmount}
+                onChange={(e) => setWithdrawAmount(e.target.value)}
+                placeholder="Amount"
+                disabled={isProcessing || isWithdrawing}
+                className="w-full pl-8 pr-3 py-2 bg-dark-600 border border-white/5 rounded-lg text-white text-sm placeholder-zinc-500 focus:outline-none focus:border-purple-500/50 disabled:opacity-50"
+              />
+            </div>
             <button
-              key={amt}
-              onClick={() => setWithdrawAmount(amt.toString())}
-              disabled={isWithdrawing || (balances?.polygon.balance || 0) < amt}
-              className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
+              onClick={async () => {
+                if (!address || !withdrawAmount) return;
+                const amount = parseFloat(withdrawAmount);
+                if (amount <= 0 || amount > poolBalance) {
+                  setError(`Invalid amount. Max: $${poolBalance.toFixed(2)}`);
+                  return;
+                }
+                setIsWithdrawing(true);
+                setError(null);
+                setSuccess(null);
+                try {
+                  const result = await withdrawBalance(address, amount, address);
+                  if (result.success) {
+                    setSuccess(`Successfully withdrew ${amount} USDC! TX: ${result.data.txHash.slice(0, 10)}...`);
+                    setWithdrawAmount('');
+                    loadBalances();
+                    refetchOnchainBalance();
+                  } else {
+                    setError(result.error || 'Withdrawal failed');
+                  }
+                } catch (err: any) {
+                  setError(err.response?.data?.error || err.message || 'Withdrawal failed');
+                } finally {
+                  setIsWithdrawing(false);
+                }
+              }}
+              disabled={isProcessing || isWithdrawing || !withdrawAmount || parseFloat(withdrawAmount || '0') <= 0 || parseFloat(withdrawAmount || '0') > poolBalance}
+              className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg transition disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium"
             >
-              ${amt}
+              {isWithdrawing ? (
+                <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                'Withdraw'
+              )}
             </button>
-          ))}
-          <button
-            onClick={() => setWithdrawAmount((balances?.polygon.balance || 0).toString())}
-            disabled={isWithdrawing || (balances?.polygon.balance || 0) === 0}
-            className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            Max
-          </button>
+          </div>
+
+          {/* Quick amounts */}
+          <div className="flex space-x-2">
+            {[10, 25, 50, poolBalance].filter(amt => amt <= poolBalance).map((amt) => (
+              <button
+                key={amt}
+                onClick={() => setWithdrawAmount(amt === poolBalance ? poolBalance.toFixed(2) : amt.toString())}
+                disabled={isProcessing || isWithdrawing || poolBalance < amt}
+                className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {amt === poolBalance ? 'Max' : `$${amt}`}
+              </button>
+            ))}
+          </div>
+
+          <p className="text-[10px] text-zinc-500 mt-3">
+            Withdraw USDC from your trading pool back to your connected wallet.
+          </p>
         </div>
-      </div>
+      )}
 
       {/* Proxy Wallet Info */}
-      {balances?.polygon.proxyAddress && (
-        <div className="mb-4 p-3 bg-dark-700/40 rounded-lg">
+      {proxyWallet && (
+        <div className="p-3 bg-dark-700/40 rounded-lg">
           <p className="text-[10px] text-zinc-500 mb-1">Your Polygon Trading Wallet</p>
           <div className="flex items-center justify-between">
             <code className="text-xs text-purple-300 font-mono">
-              {balances.polygon.proxyAddress.slice(0, 10)}...{balances.polygon.proxyAddress.slice(-8)}
+              {proxyWallet.address.slice(0, 10)}...{proxyWallet.address.slice(-8)}
             </code>
             <a
-              href={`https://polygonscan.com/address/${balances.polygon.proxyAddress}`}
+              href={`https://polygonscan.com/address/${proxyWallet.address}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[10px] text-purple-400 hover:text-purple-300"
@@ -638,12 +435,11 @@ export function UsdcBalancePanel() {
         </div>
       )}
 
-      {/* CCTP Info */}
-      <div className="pt-3 border-t border-emerald-500/10">
+      {/* Info Footer */}
+      <div className="mt-4 pt-3 border-t border-purple-500/10">
         <p className="text-[10px] text-zinc-500 leading-relaxed">
-          <span className="text-emerald-400">🔗</span>{' '}
-          Powered by <span className="text-zinc-400 font-medium">Circle CCTP</span> - 
-          Native USDC bridging between Base and Polygon. Transfers typically complete in 10-15 minutes.
+          <span className="text-purple-400">💡</span>{' '}
+          Deposit USDC on Polygon to your trading pool. Then allocate funds to individual bots from the bot dashboard.
         </p>
       </div>
     </div>

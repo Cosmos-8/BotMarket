@@ -7,7 +7,7 @@
  */
 
 import { useAccount, useChainId } from 'wagmi';
-import { baseSepolia } from 'wagmi/chains';
+import { polygon } from 'wagmi/chains';
 
 export interface WalletState {
   /** Connected wallet address (undefined if not connected) */
@@ -20,7 +20,7 @@ export interface WalletState {
   isDisconnected: boolean;
   /** Current chain ID */
   chainId: number | undefined;
-  /** Whether we're on the correct chain (Base) */
+  /** Whether we're on the correct chain (Polygon) */
   isCorrectChain: boolean;
   /** Shortened address for display (e.g., "0x1234...abcd") */
   shortAddress: string | undefined;
@@ -49,8 +49,8 @@ export function useWallet(): WalletState {
     ? `${address.slice(0, 6)}...${address.slice(-4)}`
     : undefined;
 
-  // Check if on correct chain
-  const isCorrectChain = chainId === baseSepolia.id;
+  // Check if on correct chain (Polygon Mainnet)
+  const isCorrectChain = chainId === polygon.id;
 
   return {
     address,
@@ -64,4 +64,3 @@ export function useWallet(): WalletState {
 }
 
 export default useWallet;
-

@@ -6,20 +6,20 @@ import {BotRegistry} from "../src/BotRegistry.sol";
 
 /**
  * @title DeployBotRegistry
- * @notice Deployment script for BotRegistry contract on Base Sepolia
+ * @notice Deployment script for BotRegistry contract on Polygon
  * 
  * Usage:
  *   1. Set your deployer private key:
  *      export PRIVATE_KEY=0x...
  * 
- *   2. Run the deployment:
+ *   2. Run the deployment (Polygon Mainnet):
  *      forge script script/DeployBotRegistry.s.sol \
- *        --rpc-url https://sepolia.base.org \
+ *        --rpc-url https://polygon-rpc.com \
  *        --broadcast \
  *        --verify
  * 
  *   3. After deployment, copy the contract address to:
- *      - packages/contracts/deployments/baseSepolia.json
+ *      - packages/contracts/deployments/polygonMainnet.json
  *      - apps/web/.env.local (NEXT_PUBLIC_BOT_REGISTRY_ADDRESS)
  */
 contract DeployBotRegistry is Script {
@@ -33,7 +33,7 @@ contract DeployBotRegistry is Script {
         console2.log("  BotMarket - BotRegistry Deployment");
         console2.log("========================================");
         console2.log("");
-        console2.log("Network: Base Sepolia (Chain ID: 84532)");
+        console2.log("Network: Polygon Mainnet (Chain ID: 137)");
         console2.log("Deployer:", deployer);
         console2.log("");
 
@@ -54,15 +54,14 @@ contract DeployBotRegistry is Script {
         console2.log(address(registry));
         console2.log("");
         console2.log("Next steps:");
-        console2.log("1. Update packages/contracts/deployments/baseSepolia.json");
+        console2.log("1. Update packages/contracts/deployments/polygonMainnet.json");
         console2.log("2. Set NEXT_PUBLIC_BOT_REGISTRY_ADDRESS in apps/web/.env.local");
         console2.log("");
-        console2.log("View on BaseScan:");
+        console2.log("View on PolygonScan:");
         console2.log(string.concat(
-            "https://sepolia.basescan.org/address/",
+            "https://polygonscan.com/address/",
             vm.toString(address(registry))
         ));
         console2.log("");
     }
 }
-

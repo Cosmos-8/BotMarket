@@ -42,7 +42,7 @@ export type {
 // Database entity types
 export interface User {
   id: string;
-  baseAddress: string;
+  polygonAddress: string;
   createdAt: Date;
 }
 

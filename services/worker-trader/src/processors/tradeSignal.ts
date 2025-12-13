@@ -289,6 +289,13 @@ export async function processTradeSignal(
       throw new Error(`Bot ${botId} not found`);
     }
 
+    // Check if bot is active (user has started the bot)
+    if (!bot.isActive) {
+      console.log(`${COLORS.yellow}⏸️  Bot ${botId} is not active. Signal ignored.${COLORS.reset}`);
+      console.log(`${COLORS.cyan}   User needs to start the bot from the dashboard to enable trading.${COLORS.reset}`);
+      return;
+    }
+
     const config = bot.configs[0]?.configJSON as BotConfig;
     if (!config) {
       throw new Error(`Bot ${botId} has no configuration`);

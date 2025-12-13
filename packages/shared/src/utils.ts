@@ -75,17 +75,41 @@ export function parseWebhookSignal(payload: WebhookPayload): ParsedSignal | null
     }
   }
 
-  // Format 3: Message field
+  // Format 3: Message field (TradingView format)
   if ('message' in payload) {
-    const message = String(payload.message).toLowerCase();
-    if (message.includes('green') || message.includes('up') || message.includes('yes') || message.includes('buy long')) {
+    const message = String(payload.message).toUpperCase().trim();
+    // Direct matches first
+    if (message === 'LONG' || message === '[BUY]' || message === 'BUY') {
       return {
         signalType: SIGNAL_TYPES.LONG,
         rawPayload: payload,
       };
-    } else if (message.includes('red') || message.includes('down') || message.includes('no') || message.includes('buy short')) {
+    } else if (message === 'SHORT' || message === '[SELL]' || message === 'SELL') {
       return {
         signalType: SIGNAL_TYPES.SHORT,
+        rawPayload: payload,
+      };
+    } else if (message === 'CLOSE' || message === '[CLOSE]') {
+      return {
+        signalType: SIGNAL_TYPES.CLOSE,
+        rawPayload: payload,
+      };
+    }
+    // Then check for keywords (case-insensitive)
+    const messageLower = message.toLowerCase();
+    if (messageLower.includes('long') || messageLower.includes('yes') || messageLower.includes('green') || messageLower.includes('up') || messageLower.includes('buy long')) {
+      return {
+        signalType: SIGNAL_TYPES.LONG,
+        rawPayload: payload,
+      };
+    } else if (messageLower.includes('short') || messageLower.includes('no') || messageLower.includes('red') || messageLower.includes('down') || messageLower.includes('buy short')) {
+      return {
+        signalType: SIGNAL_TYPES.SHORT,
+        rawPayload: payload,
+      };
+    } else if (messageLower.includes('close')) {
+      return {
+        signalType: SIGNAL_TYPES.CLOSE,
         rawPayload: payload,
       };
     }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getBot, sendTestSignal, deleteBot, getBotSignals, getBalance, allocateToBot, getBotBalance } from '@/lib/api';
+import { getBot, sendTestSignal, deleteBot, getBotSignals, getBalance, allocateToBot, getBotBalance, startBot, stopBot, withdrawFromBot } from '@/lib/api';
 import { useAccount } from 'wagmi';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -106,6 +106,7 @@ interface Bot {
   botId: string;
   creator: string;
   visibility: string;
+  isActive: boolean;
   config: BotConfig;
   metrics?: BotMetrics;
   recentOrders?: Order[];
@@ -153,7 +154,9 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
   const [userPoolBalance, setUserPoolBalance] = useState<number>(0);
   const [botAllocatedBalance, setBotAllocatedBalance] = useState<number>(0);
   const [allocateAmount, setAllocateAmount] = useState<string>('10');
+  const [withdrawAmount, setWithdrawAmount] = useState<string>('');
   const [isAllocating, setIsAllocating] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -329,7 +332,7 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
               <p className="text-xs text-amber-400 mb-1">💡 Your pool is empty</p>
               <p className="text-[10px] text-zinc-400">
-                Add funds to your main pool first via the CCTP bridge on the home page, then allocate to bots.
+                Add funds to your main pool first via the deposit panel on the create page, then allocate to bots.
               </p>
             </div>
           )}
@@ -337,6 +340,134 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
       ) : (
         <div className="p-4 bg-dark-700/60 rounded-lg text-center">
           <p className="text-sm text-zinc-400">Connect your wallet to allocate funds</p>
+        </div>
+      )}
+
+      {/* Withdrawal Section */}
+      {userAddress && botAllocatedBalance > 0 && (
+        <div className="mt-4 p-4 bg-red-500/5 border border-red-500/20 rounded-xl">
+          <h4 className="text-sm font-medium text-white mb-3 flex items-center space-x-2">
+            <span>📤</span>
+            <span>Withdraw from Bot</span>
+          </h4>
+          
+          <div className="flex space-x-2 mb-3">
+            <div className="flex-1 relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">$</span>
+              <input
+                type="number"
+                value={withdrawAmount}
+                onChange={(e) => setWithdrawAmount(e.target.value)}
+                placeholder="Amount"
+                disabled={isAllocating || isWithdrawing}
+                className="w-full pl-8 pr-3 py-2 bg-dark-600 border border-white/5 rounded-lg text-white text-sm placeholder-zinc-500 focus:outline-none focus:border-red-500/50 disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          {/* Quick amounts */}
+          <div className="flex space-x-2 mb-3">
+            {[10, 25, 50, botAllocatedBalance].filter(amt => amt <= botAllocatedBalance).map((amt) => (
+              <button
+                key={amt}
+                onClick={() => setWithdrawAmount(amt === botAllocatedBalance ? botAllocatedBalance.toFixed(2) : amt.toString())}
+                disabled={isAllocating || isWithdrawing || botAllocatedBalance < amt}
+                className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {amt === botAllocatedBalance ? 'Max' : `$${amt}`}
+              </button>
+            ))}
+          </div>
+
+          {/* Withdrawal Options */}
+          <div className="grid grid-cols-2 gap-2">
+            {/* Withdraw to Pool */}
+            <button
+              onClick={async () => {
+                if (!userAddress || !withdrawAmount) return;
+                const amount = parseFloat(withdrawAmount);
+                if (isNaN(amount) || amount <= 0 || amount > botAllocatedBalance) {
+                  setError(`Invalid amount. Max: $${botAllocatedBalance.toFixed(2)}`);
+                  return;
+                }
+                setIsWithdrawing(true);
+                setError(null);
+                setSuccess(null);
+                try {
+                  const result = await withdrawFromBot(userAddress, botId, amount, undefined, true);
+                  if (result.success) {
+                    setSuccess(`Successfully transferred ${amount} USDC to your trading pool!`);
+                    setWithdrawAmount('');
+                    setBotAllocatedBalance(result.data.newBotBalance);
+                    setUserPoolBalance(result.data.newPoolBalance);
+                    onFundSuccess();
+                  } else {
+                    setError(result.error || 'Transfer failed');
+                  }
+                } catch (err: any) {
+                  setError(err.response?.data?.error || err.message || 'Transfer failed');
+                } finally {
+                  setIsWithdrawing(false);
+                }
+              }}
+              disabled={isAllocating || isWithdrawing || !withdrawAmount || parseFloat(withdrawAmount || '0') <= 0 || parseFloat(withdrawAmount || '0') > botAllocatedBalance}
+              className="px-4 py-2.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/20 rounded-lg transition disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium flex items-center justify-center space-x-2"
+            >
+              {isWithdrawing ? (
+                <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <>
+                  <span>💼</span>
+                  <span>To Pool</span>
+                </>
+              )}
+            </button>
+
+            {/* Withdraw to Wallet */}
+            <button
+              onClick={async () => {
+                if (!userAddress || !withdrawAmount) return;
+                const amount = parseFloat(withdrawAmount);
+                if (isNaN(amount) || amount <= 0 || amount > botAllocatedBalance) {
+                  setError(`Invalid amount. Max: $${botAllocatedBalance.toFixed(2)}`);
+                  return;
+                }
+                setIsWithdrawing(true);
+                setError(null);
+                setSuccess(null);
+                try {
+                  const result = await withdrawFromBot(userAddress, botId, amount, userAddress, false);
+                  if (result.success) {
+                    setSuccess(`Successfully withdrew ${amount} USDC to your wallet! TX: ${result.data.txHash.slice(0, 10)}...`);
+                    setWithdrawAmount('');
+                    setBotAllocatedBalance(result.data.newBotBalance);
+                    onFundSuccess();
+                  } else {
+                    setError(result.error || 'Withdrawal failed');
+                  }
+                } catch (err: any) {
+                  setError(err.response?.data?.error || err.message || 'Withdrawal failed');
+                } finally {
+                  setIsWithdrawing(false);
+                }
+              }}
+              disabled={isAllocating || isWithdrawing || !withdrawAmount || parseFloat(withdrawAmount || '0') <= 0 || parseFloat(withdrawAmount || '0') > botAllocatedBalance}
+              className="px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg transition disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium flex items-center justify-center space-x-2"
+            >
+              {isWithdrawing ? (
+                <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <>
+                  <span>💳</span>
+                  <span>To Wallet</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <p className="text-[10px] text-zinc-500 mt-3">
+            <span className="text-purple-400">To Pool:</span> Internal transfer (no gas fees) | <span className="text-red-400">To Wallet:</span> On-chain transfer
+          </p>
         </div>
       )}
 
@@ -643,6 +774,9 @@ export default function BotDetailPage() {
   // Delete bot state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  
+  // Start/Stop bot state
+  const [isTogglingActive, setIsTogglingActive] = useState(false);
 
   // Load bot data
   const loadBot = useCallback(async (showLoading = true) => {
@@ -781,6 +915,31 @@ export default function BotDetailPage() {
     }
   };
 
+  // Handle start/stop bot
+  const handleToggleActive = async () => {
+    if (!bot) return;
+    
+    try {
+      setIsTogglingActive(true);
+      if (bot.isActive) {
+        await stopBot(botId);
+        setToast({ message: 'Bot stopped successfully!', type: 'success' });
+      } else {
+        await startBot(botId);
+        setToast({ message: 'Bot started successfully!', type: 'success' });
+      }
+      // Refresh bot data
+      loadBot(false);
+    } catch (error: any) {
+      setToast({
+        message: error.response?.data?.error || `Failed to ${bot.isActive ? 'stop' : 'start'} bot`,
+        type: 'error',
+      });
+    } finally {
+      setIsTogglingActive(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -838,14 +997,65 @@ export default function BotDetailPage() {
             </h1>
             <p className="text-zinc-500 font-mono text-sm">{bot.botId}</p>
             </div>
-          <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-            bot.visibility === 'PUBLIC' 
-              ? 'bg-accent/10 text-accent border border-accent/20' 
-              : 'bg-zinc-500/10 text-zinc-400 border border-zinc-500/20'
-          }`}>
-            {bot.visibility}
-          </span>
+          <div className="flex items-center space-x-2">
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+              bot.visibility === 'PUBLIC' 
+                ? 'bg-accent/10 text-accent border border-accent/20' 
+                : 'bg-zinc-500/10 text-zinc-400 border border-zinc-500/20'
+            }`}>
+              {bot.visibility}
+            </span>
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+              bot.isActive 
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                : 'bg-zinc-500/10 text-zinc-400 border border-zinc-500/20'
+            }`}>
+              {bot.isActive ? '● Active' : '○ Inactive'}
+            </span>
+          </div>
+        </div>
+
+        {/* Bot Control Panel */}
+        <div className="mb-6 p-4 bg-dark-700 border border-white/5 rounded-xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className={`w-3 h-3 rounded-full ${bot.isActive ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`}></div>
+              <div>
+                <h3 className="text-sm font-medium text-white">
+                  {bot.isActive ? 'Bot is actively trading' : 'Bot is stopped'}
+                </h3>
+                <p className="text-xs text-zinc-500">
+                  {bot.isActive 
+                    ? 'The bot will process incoming signals and execute trades' 
+                    : 'Start the bot to begin processing trading signals'}
+                </p>
+              </div>
             </div>
+            <button
+              onClick={handleToggleActive}
+              disabled={isTogglingActive}
+              className={`px-6 py-2.5 rounded-lg font-medium transition-colors flex items-center space-x-2 ${
+                bot.isActive
+                  ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'
+                  : 'bg-emerald-500 text-white hover:bg-emerald-600'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              {isTogglingActive ? (
+                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              ) : bot.isActive ? (
+                <>
+                  <span>⏹️</span>
+                  <span>Stop Bot</span>
+                </>
+              ) : (
+                <>
+                  <span>▶️</span>
+                  <span>Start Bot</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
 
         {/* Polymarket Badge */}
         <div className="mb-8 p-4 bg-purple-500/5 border border-purple-500/20 rounded-xl flex items-center space-x-4">
@@ -1148,12 +1358,35 @@ export default function BotDetailPage() {
                   {WEBHOOK_BASE_URL}/webhook/{botId}
                 </p>
               </div>
+              
+              {/* Warning for localhost */}
+              {WEBHOOK_BASE_URL.includes('localhost') && (
+                <div className="mb-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <p className="text-xs text-amber-400 mb-1">⚠️ TradingView requires a public URL</p>
+                  <p className="text-[10px] text-zinc-400">
+                    Localhost won&apos;t work. Use ngrok or deploy to production. Set <code className="text-amber-300">NEXT_PUBLIC_WEBHOOK_BASE_URL</code> to your public URL.
+                  </p>
+                </div>
+              )}
+              
               <button
                 onClick={copyWebhookUrl}
                 className="w-full px-4 py-2 bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors text-sm font-medium"
               >
                 📋 Copy URL
               </button>
+              
+              {/* Instructions */}
+              <div className="mt-3 pt-3 border-t border-white/5">
+                <p className="text-[10px] text-zinc-500 mb-2">
+                  <strong className="text-zinc-400">TradingView Alert Message:</strong>
+                </p>
+                <div className="space-y-1">
+                  <code className="block text-[10px] text-emerald-400 bg-dark-600 px-2 py-1 rounded">LONG</code>
+                  <code className="block text-[10px] text-red-400 bg-dark-600 px-2 py-1 rounded">SHORT</code>
+                  <code className="block text-[10px] text-zinc-400 bg-dark-600 px-2 py-1 rounded">CLOSE</code>
+                </div>
+              </div>
             </div>
 
             {/* Bot Info Card */}

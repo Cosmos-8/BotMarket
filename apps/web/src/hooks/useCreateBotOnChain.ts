@@ -3,14 +3,14 @@
 /**
  * On-Chain Bot Creation Hook
  * 
- * Handles registering bots on-chain via BotRegistry contract.
+ * Handles registering bots on-chain via BotRegistry contract on Polygon.
  * Uses wagmi v2 hooks for contract interaction.
  */
 
 import { useState, useCallback } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
-import { keccak256, toBytes, encodePacked } from 'viem';
-import { baseSepolia } from 'wagmi/chains';
+import { keccak256, toBytes } from 'viem';
+import { polygon } from 'wagmi/chains';
 import {
   BOT_REGISTRY_ADDRESS,
   BOT_REGISTRY_ABI,
@@ -45,7 +45,7 @@ export interface CreateBotOnChainResult {
   error: string | null;
   /** Whether the transaction was confirmed */
   isConfirmed: boolean;
-  /** BaseScan URL for the transaction */
+  /** PolygonScan URL for the transaction */
   txUrl: string | null;
   /** On-chain bot ID from the event (if we could parse it) */
   onChainBotId: bigint | null;
@@ -119,7 +119,7 @@ export function useCreateBotOnChain(): UseCreateBotOnChainReturn {
   if (!isConnected) {
     unavailableReason = 'Wallet not connected';
   } else if (!isCorrectChain) {
-    unavailableReason = 'Please switch to Base';
+    unavailableReason = 'Please switch to Polygon';
   } else if (!contractsConfigured) {
     unavailableReason = 'BotRegistry contract not configured';
   }
@@ -147,7 +147,7 @@ export function useCreateBotOnChain(): UseCreateBotOnChainReturn {
       const metadataURI = generateMetadataURI(params.botId);
       const feeBps = BigInt(params.feeBps ?? 0);
 
-      console.log('[OnChain] Registering bot:', {
+      console.log('[OnChain] Registering bot on Polygon:', {
         metadataURI,
         configHash,
         visibility: params.visibility,
@@ -159,7 +159,7 @@ export function useCreateBotOnChain(): UseCreateBotOnChainReturn {
         abi: BOT_REGISTRY_ABI,
         functionName: 'createBot',
         args: [metadataURI, configHash, params.visibility, feeBps],
-        chainId: baseSepolia.id,
+        chainId: polygon.id,
       });
     } catch (err: any) {
       console.error('[OnChain] Error preparing transaction:', err);
@@ -193,4 +193,3 @@ export function useCreateBotOnChain(): UseCreateBotOnChainReturn {
 }
 
 export default useCreateBotOnChain;
-
