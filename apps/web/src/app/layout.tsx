@@ -3,7 +3,6 @@ import './globals.css';
 import { Providers } from './providers';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
-import { MockTradingBanner } from '@/components/MockTradingBanner';
 
 export const metadata: Metadata = {
   title: 'BotMarket - Polymarket Bot Builder',
@@ -20,7 +19,6 @@ export default function RootLayout({
       <body className="min-h-screen bg-dark-900 text-white flex flex-col">
         <Providers>
           <Header />
-          <MockTradingBanner />
           <main className="flex-1">{children}</main>
           <Footer />
         </Providers>

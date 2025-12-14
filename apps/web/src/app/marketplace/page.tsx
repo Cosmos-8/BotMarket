@@ -9,7 +9,6 @@ import {
   isContractsConfigured,
   formatAddress,
 } from '@/config/contracts';
-import { UsdcBalancePanel } from '@/components/UsdcBalancePanel';
 
 // ============================================================================
 // Types & Constants
@@ -297,33 +296,6 @@ export default function MarketplacePage() {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Info Banners Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
-          {/* Contract Info Banner */}
-          {isContractsConfigured() && BOT_REGISTRY_ADDRESS && (
-            <div className="p-4 bg-accent/5 border border-accent/20 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-              <div className="flex items-center space-x-2">
-                <span className="text-accent">⛓️</span>
-                <span className="text-sm text-zinc-300">
-                  BotRegistry:{' '}
-                  <code className="font-mono text-accent">{formatAddress(BOT_REGISTRY_ADDRESS)}</code>
-                </span>
-              </div>
-              <a
-                href={getContractUrl(BOT_REGISTRY_ADDRESS)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-accent hover:text-accent-hover font-medium transition-colors"
-              >
-                View on PolygonScan ↗
-              </a>
-            </div>
-          )}
-          
-          {/* USDC Balance Panel */}
-          <UsdcBalancePanel />
         </div>
 
         {/* Bot Grid */}

@@ -40,6 +40,7 @@ import marketplaceRoutes from './routes/marketplace';
 import adminRoutes from './routes/admin';
 import balanceRoutes from './routes/balance';
 import polymarketRoutes from './routes/polymarket';
+import dashboardRoutes from './routes/dashboard';
 
 app.use('/bots', botRoutes);
 app.use('/webhook', webhookRoutes);
@@ -47,6 +48,7 @@ app.use('/marketplace', marketplaceRoutes);
 app.use('/admin', adminRoutes);
 app.use('/balance', balanceRoutes);
 app.use('/polymarket', polymarketRoutes);
+app.use('/dashboard', dashboardRoutes);
 
 // Start market cache service
 import './services/marketCacheService';

@@ -16,7 +16,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseUnits } from 'viem';
 import { USDC_ADDRESS, ERC20_ABI } from '@/config/contracts';
-import { getBalance, fundBalance, withdrawBalance } from '@/lib/api';
+import { getBalance, fundBalance, withdrawBalance, syncBalance } from '@/lib/api';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -49,6 +49,7 @@ export function UsdcBalancePanel() {
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [isDepositing, setIsDepositing] = useState(false);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -262,7 +263,42 @@ export function UsdcBalancePanel() {
         <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-xl">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-zinc-400">Trading Pool</span>
-            <span className="text-[10px] text-emerald-400">Ready</span>
+            <button
+              onClick={async () => {
+                if (!address) return;
+                setIsSyncing(true);
+                setError(null);
+                setSuccess(null);
+                try {
+                  const result = await syncBalance(address);
+                  if (result.success) {
+                    setSuccess(`Balance synced! Updated to $${result.data.usdcBalance.toFixed(2)} USDC`);
+                    await loadBalances();
+                  } else {
+                    setError(result.error || 'Failed to sync balance');
+                  }
+                } catch (err: any) {
+                  setError(err.message || 'Failed to sync balance');
+                } finally {
+                  setIsSyncing(false);
+                }
+              }}
+              disabled={isSyncing || !address}
+              className="text-[10px] text-emerald-400 hover:text-emerald-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+              title="Sync balance from on-chain"
+            >
+              {isSyncing ? (
+                <>
+                  <div className="w-3 h-3 border border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                  <span>Syncing...</span>
+                </>
+              ) : (
+                <>
+                  <span>🔄</span>
+                  <span>Sync</span>
+                </>
+              )}
+            </button>
           </div>
           <p className="text-xl font-bold text-white">
             {poolBalance.toFixed(2)}

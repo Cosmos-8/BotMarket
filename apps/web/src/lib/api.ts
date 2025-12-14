@@ -133,5 +133,21 @@ export async function getBotBalance(botId: string) {
   return response.data;
 }
 
+export async function syncBalance(address: string) {
+  const response = await api.post('/balance/sync', { address });
+  return response.data;
+}
+
+export async function exportBotKey(botId: string, authHeaders: Record<string, string>) {
+  const response = await api.get(`/bots/${botId}/export-key`, { headers: authHeaders });
+  return response.data;
+}
+
+// Dashboard
+export async function getDashboard(address: string) {
+  const response = await api.get(`/dashboard/${address}`);
+  return response.data;
+}
+
 export default api;
 

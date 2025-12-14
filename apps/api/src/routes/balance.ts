@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import type { Router as IRouter } from 'express';
 import { prisma } from '../lib/prisma';
-import { getAddress, isAddress, Wallet, JsonRpcProvider, Contract, parseUnits, formatUnits } from 'ethers';
+import { getAddress, isAddress, Wallet, JsonRpcProvider, Contract, parseUnits, formatUnits, keccak256, toUtf8Bytes, concat } from 'ethers';
 import { encryptPrivateKey, decryptPrivateKey } from '@botmarket/shared';
 
 const router: IRouter = Router();
@@ -46,7 +46,8 @@ function logWithdraw(from: string, to: string, amount: number, txHash: string): 
 }
 
 /**
- * Create a proxy wallet for a user if they don't have one.
+ * Create a deterministic proxy wallet for a user.
+ * This wallet is derived from the user's address, so it can be recovered after database resets.
  * This is their "main pool" wallet on Polygon for Polymarket trading.
  */
 async function ensureProxyWallet(userId: string, polygonAddress: string): Promise<{ address: string; isNew: boolean }> {
@@ -56,12 +57,21 @@ async function ensureProxyWallet(userId: string, polygonAddress: string): Promis
   });
 
   // Return existing wallet if present
-  if (user?.proxyWalletAddress) {
+  if (user?.proxyWalletAddress && user?.encryptedProxyKey) {
     return { address: user.proxyWalletAddress, isNew: false };
   }
 
-  // Generate new proxy wallet
-  const proxyWallet = Wallet.createRandom();
+  // Generate deterministic proxy wallet from user's address
+  // This ensures the same wallet is always generated for the same user address
+  const seedSecret = process.env.PROXY_WALLET_SEED_SECRET || 'botmarket-proxy-wallet-seed-v1';
+  const seed = keccak256(concat([toUtf8Bytes(seedSecret), toUtf8Bytes(polygonAddress.toLowerCase())]));
+  
+  // Use the seed as a private key (it's already a valid 32-byte hash)
+  // Ensure it's a valid private key by taking modulo of secp256k1 order
+  // For simplicity, we'll use the seed directly as it's already 32 bytes
+  const privateKey = seed; // keccak256 output is 32 bytes, valid for private key
+  
+  const proxyWallet = new Wallet(privateKey);
   const proxyAddress = proxyWallet.address;
   const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
   const encryptedKey = encryptPrivateKey(proxyWallet.privateKey, encryptionSecret);
@@ -76,9 +86,9 @@ async function ensureProxyWallet(userId: string, polygonAddress: string): Promis
   });
 
   const shortAddr = `${polygonAddress.slice(0, 6)}...${polygonAddress.slice(-4)}`;
-  console.log(`🔐 Created proxy wallet for ${shortAddr}: ${proxyAddress}`);
+  console.log(`🔐 Created/Recovered proxy wallet for ${shortAddr}: ${proxyAddress}`);
 
-  return { address: proxyAddress, isNew: true };
+  return { address: proxyAddress, isNew: !user?.proxyWalletAddress };
 }
 
 // ============================================================================
@@ -86,14 +96,48 @@ async function ensureProxyWallet(userId: string, polygonAddress: string): Promis
 // ============================================================================
 
 /**
+ * Sync on-chain USDC balance to database
+ * Only checks the proxy wallet balance (trading pool funds)
+ * User's connected wallet balance is separate and should not be included
+ */
+async function syncOnChainBalance(userId: string, proxyWalletAddress: string, userAddress: string, encryptedProxyKey: string): Promise<number> {
+  try {
+    const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+    const provider = new JsonRpcProvider(rpcUrl);
+    const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, provider);
+
+    // Only check proxy wallet on-chain balance (this is the trading pool)
+    const proxyBalance = await usdcContract.balanceOf(proxyWalletAddress);
+    const proxyBalanceFormatted = parseFloat(formatUnits(proxyBalance, USDC_DECIMALS));
+
+    // Update database to match proxy wallet's on-chain balance only
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        usdcBalance: proxyBalanceFormatted,
+      },
+    });
+
+    console.log(`💰 Synced trading pool balance for ${userAddress}: Proxy wallet (${proxyWalletAddress}) has $${proxyBalanceFormatted.toFixed(2)} USDC`);
+
+    return proxyBalanceFormatted;
+  } catch (error: any) {
+    console.error('Error syncing on-chain balance:', error);
+    throw error;
+  }
+}
+
+/**
  * GET /balance/:address
  * Get USDC balance for a wallet address on Polygon.
  * Creates user with 0 balance if not exists.
  * Also initializes proxy wallet for Polymarket trading.
+ * Automatically syncs on-chain balance if proxy wallet exists.
  */
 router.get('/:address', async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
+    const sync = req.query.sync === 'true'; // Optional: ?sync=true to force sync
 
     // Validate address format
     if (!address || !isAddress(address)) {
@@ -119,13 +163,30 @@ router.get('/:address', async (req: Request, res: Response) => {
     // Ensure user has a proxy wallet for Polymarket trading
     const proxyWallet = await ensureProxyWallet(user.id, normalizedAddress);
 
-    logBalance(normalizedAddress, user.usdcBalance);
+    // Refresh user to get latest proxy wallet info
+    const updatedUser = await prisma.user.findUnique({
+      where: { id: user.id },
+    });
+
+    // Sync on-chain balance if proxy wallet exists and has a key
+    // Always sync if explicitly requested, or if balance is 0 (might have deposits)
+    let syncedBalance = updatedUser?.usdcBalance || user.usdcBalance;
+    if (updatedUser?.proxyWalletAddress && updatedUser?.encryptedProxyKey && (sync || syncedBalance === 0)) {
+      try {
+        syncedBalance = await syncOnChainBalance(updatedUser.id, updatedUser.proxyWalletAddress, normalizedAddress, updatedUser.encryptedProxyKey);
+      } catch (error) {
+        console.warn('Failed to sync on-chain balance, using database value:', error);
+        // Continue with database value if sync fails
+      }
+    }
+
+    logBalance(normalizedAddress, syncedBalance);
 
     res.json({
       success: true,
       data: {
         address: normalizedAddress,
-        usdcBalance: user.usdcBalance,
+        usdcBalance: syncedBalance,
         // User's main proxy wallet for Polymarket
         proxyWallet: {
           address: proxyWallet.address,
@@ -140,6 +201,67 @@ router.get('/:address', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'Failed to get balance',
+    });
+  }
+});
+
+/**
+ * POST /balance/sync
+ * Sync on-chain USDC balance to database.
+ * Checks the proxy wallet's on-chain balance and updates the database.
+ * 
+ * Body: { address: string }
+ */
+router.post('/sync', async (req: Request, res: Response) => {
+  try {
+    const { address } = req.body;
+
+    // Validate address
+    if (!address || !isAddress(address)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid Ethereum address',
+      });
+    }
+
+    // Normalize address
+    const normalizedAddress = getAddress(address);
+
+    // Get user
+    const user = await prisma.user.findUnique({
+      where: { polygonAddress: normalizedAddress },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+      });
+    }
+
+    if (!user.proxyWalletAddress || !user.encryptedProxyKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'No proxy wallet found. Please deposit funds first.',
+      });
+    }
+
+    // Sync on-chain balance (checks both proxy wallet and user's connected wallet)
+    const syncedBalance = await syncOnChainBalance(user.id, user.proxyWalletAddress, normalizedAddress, user.encryptedProxyKey);
+
+    res.json({
+      success: true,
+      data: {
+        address: normalizedAddress,
+        usdcBalance: syncedBalance,
+        message: 'Balance synced from on-chain',
+      },
+    });
+  } catch (error: any) {
+    console.error('Error syncing balance:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to sync balance',
     });
   }
 });

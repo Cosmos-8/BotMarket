@@ -27,3 +27,4 @@ ALTER TABLE "Bot" ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN NOT NULL DEFAULT f
 -- Step 7: Add index on isActive for efficient querying
 CREATE INDEX IF NOT EXISTS "Bot_isActive_idx" ON "Bot"("isActive");
 
+

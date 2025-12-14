@@ -674,4 +674,92 @@ router.post('/:id/test-signal', async (req: AuthenticatedRequest, res: Response)
   }
 });
 
+/**
+ * GET /bots/:id/export-key
+ * Export the bot's private key (only accessible by bot creator)
+ * WARNING: This exposes sensitive information - use with caution
+ */
+router.get('/:id/export-key', verifyWallet, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const requesterAddress = req.user?.address;
+
+    if (!requesterAddress) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required',
+      });
+    }
+
+    // Get bot with keys
+    const bot = await prisma.bot.findUnique({
+      where: { botId: id },
+      include: {
+        keys: {
+          take: 1,
+        },
+      },
+    });
+
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found',
+      });
+    }
+
+    // Verify requester is the bot creator
+    if (bot.creator.toLowerCase() !== requesterAddress.toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only the bot creator can export the private key',
+      });
+    }
+
+    // Check if bot has a key
+    if (!bot.keys || bot.keys.length === 0 || !bot.keys[0].encryptedPrivKey) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot wallet not found',
+      });
+    }
+
+    // Decrypt the private key
+    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+    const { decryptPrivateKey } = await import('@botmarket/shared');
+    let privateKey: string;
+    try {
+      privateKey = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to decrypt bot wallet key',
+      });
+    }
+
+    // Derive wallet address for verification
+    const wallet = new Wallet(privateKey);
+    const walletAddress = wallet.address;
+
+    console.log(`🔑 Private key exported for bot ${id} by ${requesterAddress}`);
+
+    res.json({
+      success: true,
+      data: {
+        botId: id,
+        privateKey,
+        walletAddress,
+        network: 'Polygon',
+        warning: 'Keep this private key secure. Anyone with access to it can control the bot wallet and withdraw funds.',
+      },
+    });
+  } catch (error: any) {
+    console.error('Error exporting bot key:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export bot key',
+    });
+  }
+});
+
 export default router;

@@ -19,6 +19,7 @@ const NAV_LINKS = [
   { href: '/', label: 'Home' },
   { href: '/marketplace', label: 'Marketplace' },
   { href: '/create', label: 'Create Bot' },
+  { href: '/dashboard', label: 'Dashboard' },
 ];
 
 // ============================================================================

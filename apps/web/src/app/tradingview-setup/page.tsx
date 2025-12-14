@@ -79,24 +79,24 @@ export default function TradingViewSetupPage() {
                   <div className="mb-4">
                     <strong className="text-gray-900">For BUY/LONG signals:</strong>
                     <div className="mt-2 space-y-1">
-                      <code className="block bg-white p-2 rounded border">LONG</code>
-                      <code className="block bg-white p-2 rounded border">[BUY]</code>
-                      <code className="block bg-white p-2 rounded border">Buy signal</code>
+                      <code className="block bg-white p-2 rounded border text-black">LONG</code>
+                      <code className="block bg-white p-2 rounded border text-black">[BUY]</code>
+                      <code className="block bg-white p-2 rounded border text-black">Buy signal</code>
                     </div>
                   </div>
                   <div className="mb-4">
                     <strong className="text-gray-900">For SELL/SHORT signals:</strong>
                     <div className="mt-2 space-y-1">
-                      <code className="block bg-white p-2 rounded border">SHORT</code>
-                      <code className="block bg-white p-2 rounded border">[SELL]</code>
-                      <code className="block bg-white p-2 rounded border">Sell signal</code>
+                      <code className="block bg-white p-2 rounded border text-black">SHORT</code>
+                      <code className="block bg-white p-2 rounded border text-black">[SELL]</code>
+                      <code className="block bg-white p-2 rounded border text-black">Sell signal</code>
                     </div>
                   </div>
                   <div>
                     <strong className="text-gray-900">For CLOSE signals:</strong>
                     <div className="mt-2 space-y-1">
-                      <code className="block bg-white p-2 rounded border">CLOSE</code>
-                      <code className="block bg-white p-2 rounded border">[CLOSE]</code>
+                      <code className="block bg-white p-2 rounded border text-black">CLOSE</code>
+                      <code className="block bg-white p-2 rounded border text-black">[CLOSE]</code>
                     </div>
                   </div>
                 </div>

@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getBot, sendTestSignal, deleteBot, getBotSignals, getBalance, allocateToBot, getBotBalance, startBot, stopBot, withdrawFromBot } from '@/lib/api';
-import { useAccount } from 'wagmi';
+import { getBot, sendTestSignal, deleteBot, getBotSignals, getBalance, allocateToBot, getBotBalance, startBot, stopBot, withdrawFromBot, exportBotKey } from '@/lib/api';
+import { useAccount, useSignMessage } from 'wagmi';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 // Webhook URL for TradingView (can be ngrok URL for public access)
@@ -777,6 +777,14 @@ export default function BotDetailPage() {
   
   // Start/Stop bot state
   const [isTogglingActive, setIsTogglingActive] = useState(false);
+  
+  // Export key state
+  const [showExportKey, setShowExportKey] = useState(false);
+  const [exportedKey, setExportedKey] = useState<{ privateKey: string; walletAddress: string } | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  
+  // Message signing for authentication
+  const { signMessageAsync } = useSignMessage();
 
   // Load bot data
   const loadBot = useCallback(async (showLoading = true) => {
@@ -937,6 +945,59 @@ export default function BotDetailPage() {
       });
     } finally {
       setIsTogglingActive(false);
+    }
+  };
+
+  // Handle export private key
+  const handleExportKey = async () => {
+    if (!userAddress || !bot) return;
+    
+    // Verify user is the creator
+    if (bot.creator.toLowerCase() !== userAddress.toLowerCase()) {
+      setToast({
+        message: 'Only the bot creator can export the private key',
+        type: 'error',
+      });
+      return;
+    }
+    
+    try {
+      setIsExporting(true);
+      
+      // Sign message for authentication
+      const message = `BotMarket Authentication\n\nAddress: ${userAddress}\nTimestamp: ${Date.now()}`;
+      const signature = await signMessageAsync({ message });
+      
+      // Create auth headers
+      const authHeaders = {
+        'X-Address': userAddress,
+        'X-Message': message,
+        'X-Signature': signature,
+      };
+      
+      // Export the key
+      const result = await exportBotKey(botId, authHeaders);
+      
+      if (result.success) {
+        setExportedKey({
+          privateKey: result.data.privateKey,
+          walletAddress: result.data.walletAddress,
+        });
+        setShowExportKey(true);
+      } else {
+        setToast({
+          message: result.error || 'Failed to export private key',
+          type: 'error',
+        });
+      }
+    } catch (error: any) {
+      console.error('Error exporting key:', error);
+      setToast({
+        message: error.message || 'Failed to export private key. Please try again.',
+        type: 'error',
+      });
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -1411,6 +1472,26 @@ export default function BotDetailPage() {
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-zinc-400">Forks</span>
                   <span className="text-sm text-zinc-300">{bot.forkCount || 0}</span>
+                </div>
+                
+                {/* Polymarket Profile Button */}
+                {bot.proxyWallet && (
+                  <div className="pt-3 border-t border-white/5">
+                    <a
+                      href={`https://polymarket.com/account/${bot.proxyWallet.address}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full px-4 py-2 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-lg hover:bg-purple-500/20 transition-colors text-sm font-medium flex items-center justify-center space-x-2"
+                    >
+                      <span>📊</span>
+                      <span>View Polymarket Profile</span>
+                      <span className="text-xs">↗</span>
+                    </a>
+                    <p className="text-[10px] text-zinc-500 mt-2 text-center">
+                      View this bot&apos;s trading activity on Polymarket
+                    </p>
+                  </div>
+                )}
           </div>
                 {metrics?.maxDrawdown && (
                   <div className="flex justify-between items-center">
@@ -1421,6 +1502,32 @@ export default function BotDetailPage() {
               </div>
                 )}
               </div>
+              
+              {/* Export Private Key Button */}
+              {userAddress && bot.creator.toLowerCase() === userAddress.toLowerCase() && (
+                <div className="mt-6 pt-4 border-t border-white/5">
+                  <button
+                    onClick={handleExportKey}
+                    disabled={isExporting}
+                    className="w-full px-4 py-2 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                  >
+                    {isExporting ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                        <span>Exporting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>🔑</span>
+                        <span>Export Private Key</span>
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[10px] text-zinc-500 mt-2 text-center">
+                    Export the bot&apos;s wallet private key to import into your own wallet
+                  </p>
+                </div>
+              )}
               
               {/* Delete Bot Button */}
               <div className="mt-6 pt-4 border-t border-white/5">
@@ -1434,7 +1541,90 @@ export default function BotDetailPage() {
             </div>
           </div>
         </div>
-      </div>
+
+        {/* Export Key Modal */}
+        {showExportKey && exportedKey && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="bg-dark-700 border border-white/10 rounded-xl p-6 max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+              <h3 className="text-lg font-semibold text-white mb-2 flex items-center space-x-2">
+                <span>🔑</span>
+                <span>Bot Private Key</span>
+              </h3>
+              
+              <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <p className="text-sm text-red-400 font-medium mb-2">⚠️ Security Warning</p>
+                <p className="text-xs text-zinc-400">
+                  This private key gives full control over the bot&apos;s wallet. Anyone with access to it can:
+                </p>
+                <ul className="text-xs text-zinc-400 mt-2 list-disc list-inside space-y-1">
+                  <li>Withdraw all funds from the bot wallet</li>
+                  <li>Make trades on behalf of the bot</li>
+                  <li>Transfer ownership of positions</li>
+                </ul>
+                <p className="text-xs text-red-400 mt-2 font-medium">
+                  Keep this private key secure and never share it publicly!
+                </p>
+              </div>
+              
+              <div className="space-y-4 mb-4">
+                <div>
+                  <label className="text-xs text-zinc-500 mb-1 block">Wallet Address</label>
+                  <div className="bg-dark-600 rounded-lg p-3">
+                    <code className="text-sm text-emerald-300 font-mono break-all">
+                      {exportedKey.walletAddress}
+                    </code>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="text-xs text-zinc-500 mb-1 block">Private Key</label>
+                  <div className="bg-dark-600 rounded-lg p-3 relative">
+                    <code className="text-sm text-amber-300 font-mono break-all select-all">
+                      {exportedKey.privateKey}
+                    </code>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(exportedKey.privateKey);
+                        setToast({ message: 'Private key copied to clipboard!', type: 'success' });
+                      }}
+                      className="absolute top-2 right-2 px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-xs rounded transition"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg mb-4">
+                <p className="text-xs text-blue-400 font-medium mb-1">💡 How to Import</p>
+                <p className="text-xs text-zinc-400">
+                  Import this private key into MetaMask, Phantom, or any Polygon-compatible wallet to gain full control over the bot&apos;s wallet.
+                </p>
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => {
+                    setShowExportKey(false);
+                    setExportedKey(null);
+                  }}
+                  className="flex-1 px-4 py-2 bg-dark-600 text-white rounded-lg hover:bg-dark-500 transition-colors text-sm font-medium"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(exportedKey.privateKey);
+                    setToast({ message: 'Private key copied to clipboard!', type: 'success' });
+                  }}
+                  className="flex-1 px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors text-sm font-medium"
+                >
+                  📋 Copy Private Key
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (

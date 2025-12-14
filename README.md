@@ -1,10 +1,8 @@
- # 🤖 BotMarket
+# 🤖 BotMarket
 
 **No-Code Polymarket Trading Bot Builder & Marketplace**
 
-Build, deploy, and share automated trading bots for Polymarket prediction markets — no coding required. Fork successful strategies, track performance, and manage risk with USDC-denominated positions.
-
-> 🏆 Built for **MBC25 Hackathon** — targeting Base Main Track, Polymarket Bounty, and Circle USDC Bounty.
+Build, deploy, and share automated trading bots for Polymarket prediction markets — no coding required. Fork successful strategies, track performance, and manage risk with USDC-denominated positions on Polygon.
 
 ---
 
@@ -14,16 +12,16 @@ Build, deploy, and share automated trading bots for Polymarket prediction market
 - [Key Features](#-key-features)
 - [Architecture](#-architecture)
 - [Monorepo Structure](#-monorepo-structure)
-- [Why Base](#-why-base)
+- [Why Polygon](#-why-polygon)
 - [Polymarket Integration](#-polymarket-integration)
-- [USDC & Circle CCTP Story](#-usdc--circle-cctp-story)
+- [USDC & Direct Deposits](#-usdc--direct-deposits)
 - [Tech Stack](#-tech-stack)
 - [Quick Start](#-quick-start)
 - [Environment Variables](#-environment-variables)
 - [Database Setup](#-database-setup)
 - [Running the Dev Stack](#-running-the-dev-stack)
 - [On-Chain Contract](#-on-chain-contract)
-- [Demo Flow for Judges](#-demo-flow-for-hackathon-judges)
+- [Features](#-features)
 - [Limitations & Roadmap](#-limitations--roadmap)
 
 ---
@@ -36,9 +34,11 @@ BotMarket democratizes algorithmic trading on Polymarket by providing:
 
 2. **Bot Marketplace** — Browse public bots sorted by ROI, PNL, and win rate. Fork successful strategies with one click.
 
-3. **On-Chain Registry** — Bots are registered on Base, creating a transparent, verifiable record of bot creation and forking lineage.
+3. **On-Chain Registry** — Bots are registered on Polygon, creating a transparent, verifiable record of bot creation and forking lineage.
 
-4. **USDC-Based Risk Management** — All positions are sized in USDC, with a clear path to production using Circle's CCTP for cross-chain collateral bridging.
+4. **USDC-Based Risk Management** — All positions are sized in USDC with direct deposits on Polygon. Each bot has its own isolated wallet for fund management.
+
+5. **Dashboard** — Comprehensive dashboard to manage your trading pool, all bots, deposits, withdrawals, and view performance statistics.
 
 ---
 
@@ -49,11 +49,15 @@ BotMarket democratizes algorithmic trading on Polymarket by providing:
 | 🔧 **No-Code Configuration** | Create bots by selecting currency, timeframe, position size, and risk parameters |
 | 📊 **TradingView Integration** | Receive webhook signals (LONG/SHORT/CLOSE) from TradingView alerts |
 | 🏪 **Bot Marketplace** | Browse, sort, and fork public bots based on performance metrics |
-| ⛓️ **On-Chain Registry** | Bot metadata stored on Base Sepolia via `BotRegistry.sol` |
-| 💵 **USDC Balances** | Fund trading accounts with USDC (mock for hackathon, production-ready architecture) |
+| ⛓️ **On-Chain Registry** | Bot metadata stored on Polygon Mainnet via `BotRegistry.sol` |
+| 💵 **USDC Balances** | Direct USDC deposits on Polygon to your trading pool and individual bots |
 | 📈 **Performance Tracking** | Real-time PNL, ROI, win rate, and max drawdown metrics |
 | 🔒 **Risk Controls** | Cooldown periods, max trades per day, position size limits |
+| 🎛️ **Bot Management** | Start/stop bots, allocate funds, withdraw profits, export private keys |
+| 📊 **Dashboard** | Centralized dashboard to manage all bots and funds |
+| 🔑 **Private Key Export** | Export bot wallet private keys to import into your own wallet |
 | 🎭 **Mock Trading Mode** | Safe demo mode simulates trades without real funds |
+| 🤖 **Automated Claiming** | Automatic claiming of winning positions from resolved Polymarket markets |
 
 ---
 
@@ -63,9 +67,12 @@ BotMarket democratizes algorithmic trading on Polymarket by providing:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              FRONTEND (Next.js)                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   /create   │  │ /marketplace│  │  /bots/:id  │  │  RainbowKit Wallet  │ │
-│  │  Bot Form   │  │  Bot Grid   │  │ Bot Details │  │   Base Sepolia      │ │
+│  │   /create   │  │ /marketplace│  │  /bots/:id  │  │    /dashboard       │ │
+│  │  Bot Form   │  │  Bot Grid   │  │ Bot Details │  │  Bot Management     │ │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │              RainbowKit Wallet (Polygon Mainnet)                      │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────┬─────────────────────────────────────────┘
                                     │ HTTP/REST
                                     ▼
@@ -74,7 +81,12 @@ BotMarket democratizes algorithmic trading on Polymarket by providing:
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │   /bots     │  │ /marketplace│  │  /webhook   │  │     /balance        │ │
 │  │   CRUD      │  │   Listing   │  │  Signals    │  │   USDC Funding      │ │
+│  │  Start/Stop │  │             │  │             │  │   Withdrawals       │ │
 │  └─────────────┘  └─────────────┘  └──────┬──────┘  └─────────────────────┘ │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────┴──────┐  ┌─────────────────────┐ │
+│  │  /dashboard │  │ /polymarket │  │ /bots/:id/   │  │   /balance/bot/:id  │ │
+│  │  User Stats │  │ Market Data │  │ export-key   │  │   Withdraw           │ │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 └───────────────────────────────────────────┼─────────────────────────────────┘
                                             │ BullMQ
                     ┌───────────────────────┼───────────────────────┐
@@ -83,6 +95,7 @@ BotMarket democratizes algorithmic trading on Polymarket by providing:
         │   Worker-Trader   │   │  Worker-Metrics   │   │      Redis        │
         │  Process Signals  │   │  Update Stats     │   │   Job Queues      │
         │  Execute Trades   │   │  Calculate ROI    │   │                   │
+        │  Claim Positions  │   │  Track PNL        │   │                   │
         └─────────┬─────────┘   └─────────┬─────────┘   └───────────────────┘
                   │                       │
                   └───────────┬───────────┘
@@ -91,16 +104,18 @@ BotMarket democratizes algorithmic trading on Polymarket by providing:
                   │     PostgreSQL        │
                   │  Bots, Orders, Fills  │
                   │  Metrics, Balances    │
+                  │  Users (polygonAddr)  │
                   └───────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           EXTERNAL SERVICES                                 │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │   Polymarket    │  │   TradingView   │  │      Base Sepolia           │  │
-│  │   Gamma API     │  │    Webhooks     │  │   BotRegistry Contract      │  │
-│  │  Market Data    │  │  LONG/SHORT/    │  │   0x2239...d427             │  │
-│  └─────────────────┘  │     CLOSE       │  └─────────────────────────────┘  │
-│                       └─────────────────┘                                   │
+│  │   Polymarket    │  │   TradingView    │  │      Polygon Mainnet         │  │
+│  │   Gamma API     │  │    Webhooks      │  │   BotRegistry Contract      │  │
+│  │  Market Data     │  │  LONG/SHORT/     │  │   0x5971...6958             │  │
+│  │  CLOB API        │  │     CLOSE        │  │   USDC (0x3c49...3359)      │  │
+│  │  Order Execution │  │                 │  │                             │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -113,14 +128,16 @@ BotMarket/
 ├── apps/
 │   ├── api/                    # Express.js REST API
 │   │   ├── prisma/             # Database schema & migrations
-│   │   │   ├── schema.prisma   # Prisma schema
+│   │   │   ├── schema.prisma   # Prisma schema (Polygon addresses)
 │   │   │   └── seed.ts         # Demo data seeder
 │   │   └── src/
 │   │       ├── routes/         # API endpoints
-│   │       │   ├── bots.ts     # Bot CRUD
+│   │       │   ├── bots.ts     # Bot CRUD, start/stop, export-key
 │   │       │   ├── marketplace.ts
 │   │       │   ├── webhook.ts  # TradingView signals
-│   │       │   └── balance.ts  # USDC funding
+│   │       │   ├── balance.ts  # USDC funding, withdrawals
+│   │       │   ├── dashboard.ts # User dashboard data
+│   │       │   └── polymarket.ts # Market data
 │   │       ├── lib/            # Shared utilities
 │   │       └── services/       # Business logic
 │   │
@@ -129,17 +146,23 @@ BotMarket/
 │           ├── app/            # App Router pages
 │           │   ├── page.tsx    # Home
 │           │   ├── create/     # Bot builder
-│           │   ├── marketplace/
-│           │   └── bots/[id]/  # Bot details
+│           │   ├── marketplace/ # Bot marketplace
+│           │   ├── dashboard/   # User dashboard
+│           │   ├── bots/[id]/   # Bot details
+│           │   └── tradingview-setup/ # TradingView guide
 │           ├── components/     # React components
-│           ├── hooks/          # Custom hooks (useWallet, useUsdcBalance)
-│           └── config/         # Contract addresses
+│           ├── hooks/          # Custom hooks
+│           └── config/         # Contract addresses (Polygon)
 │
 ├── services/
 │   ├── worker-trader/          # Trade execution worker
 │   │   └── src/
 │   │       ├── processors/     # Signal processing
-│   │       └── lib/            # Mock execution, Prisma
+│   │       ├── lib/
+│   │       │   ├── polymarket.ts # Polymarket API client
+│   │       │   ├── polymarketSigning.ts # EIP-712 signing
+│   │       │   ├── claimPositions.ts # Auto-claiming
+│   │       │   └── tradingConfig.ts
 │   │
 │   └── worker-metrics/         # Metrics calculation worker
 │       └── src/
@@ -151,13 +174,15 @@ BotMarket/
 │   │       ├── types.ts        # TypeScript interfaces
 │   │       ├── schemas.ts      # Zod validation schemas
 │   │       ├── constants.ts    # Shared constants
+│   │       ├── utils.ts        # Encryption, wallet generation
 │   │       └── marketDiscovery.ts  # Polymarket slug generation
 │   │
 │   └── contracts/              # Solidity smart contracts
 │       ├── src/
 │       │   └── BotRegistry.sol # On-chain bot registry
 │       ├── script/             # Foundry deploy scripts
-│       └── deployments/        # Deployment addresses
+│       └── deployments/       # Deployment addresses
+│           └── polygonMainnet.json
 │
 ├── docker-compose.yml          # PostgreSQL + Redis
 ├── package.json                # Root workspace config
@@ -167,26 +192,32 @@ BotMarket/
 
 ---
 
-## ⛓️ Why Base
+## ⛓️ Why Polygon
 
-BotMarket is built on **Base** for several strategic reasons:
+BotMarket is built on **Polygon** for several strategic reasons:
 
-1. **Low Transaction Costs** — Registering bots and forking strategies on Base costs fractions of a cent, making the marketplace economically viable.
+1. **Low Transaction Costs** — Polygon's low gas fees make bot operations economically viable.
 
-2. **Coinbase Ecosystem** — Base's integration with Coinbase Smart Wallet enables seamless onboarding for mainstream users.
+2. **Polymarket Native** — Polymarket operates on Polygon, enabling direct USDC deposits and seamless integration.
 
 3. **EVM Compatibility** — Our Solidity contracts work out-of-the-box, and the existing tooling (Foundry, ethers.js) just works.
 
-4. **Growing DeFi Ecosystem** — Base's TVL growth indicates strong user adoption, perfect for a trading-focused application.
+4. **Mature Ecosystem** — Polygon's established DeFi ecosystem provides reliable infrastructure for trading applications.
+
+5. **Direct USDC** — Native USDC on Polygon (Circle's official USDC) eliminates the need for bridging.
 
 ### BotRegistry Contract
 
-The `BotRegistry.sol` contract on Base Sepolia provides:
+The `BotRegistry.sol` contract on Polygon Mainnet provides:
 
 - **Bot Creation** — `createBot(configHash, metadataURI, visibility)` registers a new bot on-chain
 - **Bot Forking** — `forkBot(parentBotId, configHash)` creates a derivative with lineage tracking
 - **Visibility Control** — PUBLIC or PRIVATE bot settings
 - **Event Logging** — All operations emit events for indexing
+
+**Deployed Address:** `0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958`
+
+**View on PolygonScan:** [https://polygonscan.com/address/0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958](https://polygonscan.com/address/0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958)
 
 ---
 
@@ -217,9 +248,7 @@ TradingView alerts send webhooks with signals:
 
 ```json
 {
-  "botId": "bot_abc123",
-  "secret": "webhook_secret",
-  "signal": "LONG"  // or "SHORT", "CLOSE"
+  "message": "LONG"  // or "SHORT", "CLOSE", "[BUY]", "[SELL]"
 }
 ```
 
@@ -228,46 +257,49 @@ The worker processes these signals:
 - **SHORT** → Buy NO outcome  
 - **CLOSE** → Exit current position
 
+### Automated Position Claiming
+
+When Polymarket markets resolve, winning positions are automatically claimed and funds are credited back to bot accounts. The system:
+- Checks for resolved markets hourly
+- Identifies winning positions
+- Claims tokens and converts to USDC
+- Updates bot balances automatically
+
 ---
 
-## 💵 USDC & Circle CCTP Story
+## 💵 USDC & Direct Deposits
 
-### Current Implementation (Hackathon MVP)
+### Current Implementation
 
-BotMarket uses an **off-chain USDC balance** system:
+BotMarket uses **direct USDC deposits on Polygon**:
 
-```typescript
-// Fund trading balance (mock)
-POST /balance/fund
-{ "address": "0x...", "amount": 100 }
+1. **User Trading Pool** — Users deposit USDC directly to their Polygon proxy wallet
+2. **Bot Allocation** — Allocate funds from the trading pool to individual bots
+3. **Bot Wallets** — Each bot has its own isolated Polygon wallet for trading
+4. **Withdrawals** — Withdraw from bots to pool (internal) or directly to wallet (on-chain)
 
-// Check balance
-GET /balance/0x...
-{ "address": "0x...", "usdcBalance": 100 }
-```
-
-All bot positions are sized in USDC, providing:
-- Clear risk denominations ($25 per trade, $200 max position)
-- Familiar unit of account for traders
-- Direct mapping to Polymarket's USDC collateral
-
-### Production Roadmap with Circle CCTP
-
-In production, BotMarket will leverage **Circle's Cross-Chain Transfer Protocol (CCTP)**:
+### Deposit Flow
 
 ```
-┌─────────────┐         ┌─────────────┐         ┌─────────────┐
-│    Base     │  CCTP   │   Circle    │  CCTP   │   Polygon   │
-│   (USDC)    │ ──────► │   Bridge    │ ──────► │   (USDC)    │
-│  User Funds │         │             │         │  Polymarket │
-└─────────────┘         └─────────────┘         └─────────────┘
+User Wallet (Polygon)
+    ↓ (USDC Transfer)
+User Proxy Wallet (Trading Pool)
+    ↓ (Internal Allocation)
+Bot Wallet
+    ↓ (Trading)
+Polymarket Positions
 ```
 
-**Why CCTP?**
-- Native USDC burning/minting (no wrapped tokens)
-- Secure, audited bridge infrastructure
-- Sub-minute finality for position funding
-- Same USDC on both chains
+### Withdrawal Options
+
+- **To Pool** — Internal transfer (no gas fees) - move funds back to trading pool
+- **To Wallet** — On-chain transfer to user's wallet (requires gas)
+
+### USDC Details
+
+- **Token Address:** `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359` (Circle's native USDC on Polygon)
+- **Decimals:** 6
+- **Network:** Polygon Mainnet
 
 ---
 
@@ -279,7 +311,7 @@ In production, BotMarket will leverage **Circle's Cross-Chain Transfer Protocol 
 | **Backend** | Express.js, Node.js 20+ |
 | **Database** | PostgreSQL 16, Prisma ORM |
 | **Queue** | Redis 7, BullMQ |
-| **Blockchain** | Base Sepolia, Solidity, Foundry |
+| **Blockchain** | Polygon Mainnet, Solidity, Foundry |
 | **Validation** | Zod schemas |
 | **Package Manager** | pnpm (workspaces) |
 | **Containerization** | Docker Compose |
@@ -294,11 +326,12 @@ In production, BotMarket will leverage **Circle's Cross-Chain Transfer Protocol 
 - pnpm 8+
 - Docker & Docker Compose
 - Git
+- Foundry (for contract deployment) - [Install Foundry](https://book.getfoundry.sh/getting-started/installation)
 
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/your-org/BotMarket.git
+git clone https://github.com/Cosmos-8/BotMarket.git
 cd BotMarket
 pnpm install
 ```
@@ -331,7 +364,10 @@ cp apps/api/.env services/worker-metrics/.env
 
 ```bash
 # Generate Prisma client, run migrations, seed demo data
-pnpm db:setup
+cd apps/api
+npx prisma generate
+npx prisma migrate deploy
+npx prisma db seed
 ```
 
 ### 5. Build Shared Package
@@ -343,7 +379,11 @@ cd packages/shared && pnpm build && cd ../..
 ### 6. Start Development
 
 ```bash
+# Start all services
 pnpm dev
+
+# Or use the convenience script (Windows)
+start-botmarket.bat
 ```
 
 Access:
@@ -363,19 +403,29 @@ DATABASE_URL="postgresql://postgres:postgres@localhost:5432/botmarket?schema=pub
 # Redis
 REDIS_URL="redis://localhost:6379"
 
-# Base RPC
-BASE_RPC_URL="https://sepolia.base.org"
-BASE_CHAIN_ID=84532
+# Polygon RPC
+POLYGON_RPC_URL="https://polygon-rpc.com"
 
 # Security
 BOT_KEY_ENCRYPTION_SECRET="your-secret-key-change-in-production"
+SIWE_DOMAIN="localhost"
+SIWE_ORIGIN="http://localhost:3001"
+
+# Trading Mode
+# Options: mock, gamma, mainnet
+TRADING_MODE=mock
+
+# Polymarket API
+POLYMARKET_GAMMA_API=https://gamma-api.polymarket.com
+POLYMARKET_CLOB_API=https://clob.polymarket.com
+
+# Safety Caps
+MAX_TRADE_SIZE_USD=25
+MAX_DAILY_NOTIONAL_USD=100
 
 # Server
 PORT=3001
 NODE_ENV=development
-
-# Trading Mode (false = mock mode for demo)
-ENABLE_LIVE_TRADING=false
 ```
 
 ### Web (`apps/web/.env.local`)
@@ -385,13 +435,21 @@ ENABLE_LIVE_TRADING=false
 NEXT_PUBLIC_API_URL=http://localhost:3001
 
 # Chain
-NEXT_PUBLIC_BASE_CHAIN_ID=84532
+NEXT_PUBLIC_POLYGON_CHAIN_ID=137
+
+# Webhook Base URL (for TradingView)
+# For local development, use ngrok: ngrok http 3001
+# Then set: NEXT_PUBLIC_WEBHOOK_BASE_URL=https://your-ngrok-url.ngrok.io
+NEXT_PUBLIC_WEBHOOK_BASE_URL=http://localhost:3001
 
 # WalletConnect (optional for local dev)
 NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=
 
 # Deployed Contract
-NEXT_PUBLIC_BOT_REGISTRY_ADDRESS=0x2239F90B2EE92a3ef47525A4041e840602B1d427
+NEXT_PUBLIC_BOT_REGISTRY_ADDRESS=0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958
+
+# USDC Address on Polygon
+NEXT_PUBLIC_USDC_ADDRESS=0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
 ```
 
 ---
@@ -402,30 +460,30 @@ NEXT_PUBLIC_BOT_REGISTRY_ADDRESS=0x2239F90B2EE92a3ef47525A4041e840602B1d427
 
 ```prisma
 model User {
-  id          String   @id
-  baseAddress String   @unique
-  usdcBalance Float    @default(0)
-  createdBots Bot[]
+  id                  String   @id
+  polygonAddress      String   @unique  // User's Polygon wallet
+  usdcBalance         Float    @default(0)
+  proxyWalletAddress  String?  // Trading pool wallet
+  encryptedProxyKey   String?  // Encrypted private key
+  createdBots         Bot[]
 }
 
 model Bot {
   id          String   @id
   botId       String   @unique  // On-chain ID
-  creator     String
+  creator     String   // Polygon address
   visibility  String   // PUBLIC | PRIVATE
+  isActive    Boolean  @default(false)  // Start/stop flag
   configHash  String
   metrics     BotMetrics?
   orders      Order[]
   fills       Fill[]
+  keys        BotKey[]  // Bot wallet keys
 }
 
-model BotMetrics {
-  botId       String   @unique
-  pnlUsd      Float
-  roiPct      Float
-  trades      Int
-  winRate     Float
-  maxDrawdown Float
+model BotKey {
+  botId           String   @unique
+  encryptedPrivKey String  // Encrypted bot wallet key
 }
 ```
 
@@ -433,19 +491,20 @@ model BotMetrics {
 
 ```bash
 # Generate Prisma client
-pnpm --filter @botmarket/api db:generate
+cd apps/api
+npx prisma generate
 
 # Run migrations
-pnpm --filter @botmarket/api db:migrate
+npx prisma migrate deploy
 
 # Seed demo data
-pnpm --filter @botmarket/api db:seed
+npx prisma db seed
 
 # Reset everything
-pnpm --filter @botmarket/api db:reset
+npx prisma migrate reset
 
 # Open Prisma Studio
-pnpm --filter @botmarket/api db:studio
+npx prisma studio
 ```
 
 ---
@@ -461,7 +520,7 @@ pnpm dev
 Starts:
 - `apps/web` — Next.js frontend on :3000
 - `apps/api` — Express API on :3001
-- `services/worker-trader` — Trade processor
+- `services/worker-trader` — Trade processor, position claimer
 - `services/worker-metrics` — Metrics calculator
 
 ### Individual Services
@@ -499,9 +558,9 @@ curl http://localhost:3001/health
 
 ### BotRegistry.sol
 
-**Address (Base Sepolia):** `0x2239F90B2EE92a3ef47525A4041e840602B1d427`
+**Address (Polygon Mainnet):** `0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958`
 
-**View on BaseScan:** [https://sepolia.basescan.org/address/0x2239F90B2EE92a3ef47525A4041e840602B1d427](https://sepolia.basescan.org/address/0x2239F90B2EE92a3ef47525A4041e840602B1d427)
+**View on PolygonScan:** [https://polygonscan.com/address/0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958](https://polygonscan.com/address/0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958)
 
 ### Contract Interface
 
@@ -511,13 +570,14 @@ interface IBotRegistry {
     function createBot(
         bytes32 configHash,
         string memory metadataURI,
-        bool isPublic
+        string memory visibility
     ) external returns (uint256 botId);
 
     // Fork an existing bot
     function forkBot(
         uint256 parentBotId,
-        bytes32 newConfigHash
+        bytes32 newConfigHash,
+        string memory metadataURI
     ) external returns (uint256 newBotId);
 
     // Get bot info
@@ -525,9 +585,8 @@ interface IBotRegistry {
         address creator,
         bytes32 configHash,
         string memory metadataURI,
-        bool isPublic,
-        uint256 parentBotId,
-        uint256 forkCount
+        string memory visibility,
+        uint256 parentBotId
     );
 }
 ```
@@ -540,112 +599,82 @@ cd packages/contracts
 # Set private key
 export PRIVATE_KEY=0x...
 
-# Deploy to Base Sepolia
+# Deploy to Polygon Mainnet
 forge script script/DeployBotRegistry.s.sol:DeployBotRegistryScript \
-  --rpc-url https://sepolia.base.org \
-  --broadcast
+  --rpc-url https://polygon-rpc.com \
+  --broadcast \
+  --verify
 ```
 
 ---
 
-## 🎬 Demo Flow for Hackathon Judges
+## 🎬 Features
 
-### 1. View Marketplace (30 sec)
+### Bot Management
 
-1. Navigate to http://localhost:3000/marketplace
-2. See 5 demo bots with performance metrics:
-   - BTC 4h Momentum: **+31.7% ROI**
-   - BTC 15m Trend: **+24.5% ROI**
-   - ETH 1h Breakout: **+18.2% ROI**
-3. Note the **BotRegistry contract address** displayed
-4. Click "View on BaseScan" to verify on-chain
+- **Create Bots** — Configure trading bots with currency, timeframe, risk parameters
+- **Start/Stop Bots** — Control when bots are actively trading
+- **Bot Dashboard** — View all your bots, balances, and performance in one place
+- **Fork Bots** — Clone successful strategies from the marketplace
 
-### 2. Connect Wallet (15 sec)
+### Fund Management
 
-1. Click "Connect Wallet" in header
-2. Select wallet (MetaMask, Coinbase, etc.)
-3. Switch to Base Sepolia if prompted
-4. See connected address displayed
+- **Trading Pool** — Deposit USDC to your main trading pool
+- **Bot Allocation** — Allocate funds from pool to individual bots
+- **Withdrawals** — Withdraw from bots to pool (internal) or wallet (on-chain)
+- **Balance Tracking** — Real-time balance tracking for pool and individual bots
 
-### 3. Fund USDC Balance (20 sec)
+### Trading Features
 
-1. See "USDC Trading Balance" panel
-2. Click "+$50" to add mock USDC
-3. Balance updates to $50.00 USDC
-4. Note Circle CCTP copy: *"bridged to Polygon using Circle's CCTP"*
+- **TradingView Integration** — Connect TradingView alerts via webhooks
+- **Signal Processing** — Automatic processing of LONG/SHORT/CLOSE signals
+- **Order Execution** — Submit orders to Polymarket CLOB API
+- **Position Tracking** — Track all positions and fills
+- **Automated Claiming** — Automatic claiming of winning positions
 
-### 4. Create a Bot (45 sec)
+### Security & Control
 
-1. Navigate to http://localhost:3000/create
-2. Configure bot:
-   - Currency: **Bitcoin**
-   - Timeframe: **1 hour**
-   - Trade Size: **$25**
-   - Max Position: **$200**
-3. Click "Create Bot"
-4. Bot registered in database
-
-### 5. View Trade Execution (30 sec)
-
-1. Check terminal running `pnpm dev`
-2. See worker logs:
-   ```
-   🤖 Starting Trader Worker...
-   ║  ⚠️  MOCK TRADING MODE              ║
-   🔗 Trader Worker Redis connected
-   ```
-3. Explain: In production, signals flow from TradingView → Webhook → Queue → Trade
-
-### 6. API Demo (Optional, 30 sec)
-
-```bash
-# Get balance
-curl http://localhost:3001/balance/0x123...
-
-# Fund balance
-curl -X POST http://localhost:3001/balance/fund \
-  -H "Content-Type: application/json" \
-  -d '{"address":"0x123...","amount":100}'
-
-# List marketplace bots
-curl http://localhost:3001/marketplace
-```
+- **Private Key Export** — Export bot wallet private keys to import into your own wallet
+- **Polymarket Profiles** — Each bot has its own Polymarket profile (wallet address)
+- **Encrypted Storage** — Bot wallet keys are encrypted at rest
+- **Wallet Verification** — Signature-based authentication for sensitive operations
 
 ---
 
 ## 🚧 Limitations & Roadmap
 
-### Current Limitations (Hackathon MVP)
+### Current Limitations (MVP)
 
 | Limitation | Reason | Production Solution |
 |------------|--------|---------------------|
-| Mock trading only | No Polymarket API keys | Integrate CLOB API with real keys |
-| Off-chain USDC balance | Simplified for demo | On-chain USDC with CCTP bridging |
-| No real wallet signing | Bot creation not calling contract | Integrate contract calls in UI |
+| Mock trading only | Safe demo mode | Integrate CLOB API with real keys |
+| Simplified position claiming | CTF contract integration pending | Full CTF redemption implementation |
 | Basic UI | Time constraints | Full design system, mobile responsive |
 
 ### Roadmap
 
 **Phase 1: Production Trading (Q1)**
-- [ ] Integrate Polymarket CLOB API
+- [x] Direct USDC deposits on Polygon
+- [x] Bot start/stop functionality
+- [x] Withdrawal system
+- [x] Dashboard for bot management
+- [x] Private key export
+- [ ] Full CTF position claiming implementation
 - [ ] Real order execution with user's API keys
 - [ ] Position tracking and P&L calculation
 
-**Phase 2: On-Chain Integration (Q1)**
-- [ ] Call `createBot()` from UI with wallet signature
-- [ ] Store configHash on-chain for verification
-- [ ] Fork tracking with on-chain lineage
-
-**Phase 3: USDC & CCTP (Q2)**
-- [ ] Real USDC deposits on Base
-- [ ] Circle CCTP integration for Polygon bridging
-- [ ] Automated collateral management
-
-**Phase 4: Advanced Features (Q2-Q3)**
+**Phase 2: Advanced Features (Q2)**
 - [ ] Strategy backtesting
 - [ ] Multi-market bots
 - [ ] Copy trading subscriptions
 - [ ] Mobile app
+- [ ] Advanced analytics
+
+**Phase 3: Scale & Optimize (Q3)**
+- [ ] Multi-chain support
+- [ ] Advanced risk management
+- [ ] Social features
+- [ ] API for third-party integrations
 
 ---
 
@@ -658,13 +687,14 @@ MIT License — see [LICENSE](LICENSE) for details.
 ## 🙏 Acknowledgments
 
 - **Polymarket** — Prediction market infrastructure
-- **Base** — L2 blockchain platform
-- **Circle** — USDC and CCTP protocols
+- **Polygon** — Scalable blockchain platform
+- **Circle** — USDC stablecoin
 - **RainbowKit** — Wallet connection UI
 - **Prisma** — Database ORM
+- **Foundry** — Smart contract development toolkit
 
 ---
 
 <p align="center">
-  Built with ❤️ for <strong>MBC25 Hackathon</strong>
+  Built with ❤️ for automated trading on Polymarket
 </p>
