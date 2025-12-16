@@ -11,14 +11,15 @@ datasource db {
 }
 
 model User {
-  id                  String   @id @default(cuid())
-  polygonAddress      String   @unique // User's Polygon wallet address
-  usdcBalance         Float    @default(0) // USDC balance on Polygon (deposited to proxy wallet)
+  id                    String   @id @default(cuid())
+  polygonAddress        String   @unique // User's Polygon wallet address
+  usdcBalance           Float    @default(0) // USDC balance on Polygon (deposited to proxy wallet)
   // Polygon proxy wallet for Polymarket trading
-  proxyWalletAddress  String?  // Derived Polygon address for trading
-  encryptedProxyKey   String?  // Encrypted private key for proxy wallet
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @default(now()) @updatedAt
+  proxyWalletAddress    String?  // Derived Polygon address for trading
+  encryptedProxyKey     String?  // Encrypted private key for proxy wallet
+  polymarketRegistered  Boolean  @default(false) // Whether the proxy wallet is registered on Polymarket
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @default(now()) @updatedAt
 
   createdBots   Bot[]
 }

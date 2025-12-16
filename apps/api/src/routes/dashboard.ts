@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import type { Router as IRouter } from 'express';
 import { prisma } from '../lib/prisma';
 import { getAddress, isAddress } from 'ethers';
@@ -138,6 +138,7 @@ router.get('/:address', async (req: Request, res: Response) => {
           ? {
               address: proxyWalletAddress,
               network: 'Polygon',
+              polymarketRegistered: user.polymarketRegistered,
             }
           : null,
         bots: botsWithBalances,

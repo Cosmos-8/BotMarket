@@ -72,10 +72,30 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       update: {},
     });
 
-    // Generate a proxy wallet for this bot (Polygon-compatible)
-    const proxyWallet = Wallet.createRandom();
-    const proxyAddress = proxyWallet.address;
-    const proxyPrivateKey = proxyWallet.privateKey;
+    // Get wallet for this bot - either user-provided or generate new
+    let proxyAddress: string;
+    let proxyPrivateKey: string;
+    
+    if (body.polymarketPrivateKey) {
+      // User provided their own Polymarket-approved wallet
+      try {
+        const userWallet = new Wallet(body.polymarketPrivateKey);
+        proxyAddress = userWallet.address;
+        proxyPrivateKey = body.polymarketPrivateKey;
+        console.log(`🔐 Using user-provided Polymarket wallet for bot ${botId}: ${proxyAddress}`);
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid private key format. Make sure it starts with 0x and is 66 characters.',
+        });
+      }
+    } else {
+      // Generate a new proxy wallet (user will need to register on Polymarket)
+      const proxyWallet = Wallet.createRandom();
+      proxyAddress = proxyWallet.address;
+      proxyPrivateKey = proxyWallet.privateKey;
+      console.log(`🔐 Generated new proxy wallet for bot ${botId}: ${proxyAddress}`);
+    }
 
     // Encrypt the private key for storage
     const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';

@@ -82,7 +82,8 @@ export interface RequiredEnvVars {
 const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
 
 /** USDC contract address on Polygon */
-const USDC_ADDRESS_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+// Native USDC on Polygon (not USDC.e bridged version)
+const USDC_ADDRESS_POLYGON = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
 
 /** Minimum MATIC balance required for gas */
 const MIN_MATIC_BALANCE = 0.01;
@@ -366,11 +367,19 @@ async function getLastNTradesForBot(botId: string, n: number): Promise<{ pnl: nu
 /**
  * Display a giant warning banner and prompt for confirmation.
  * Returns true only if user types LIVE_CONFIRM.
+ * Set AUTO_CONFIRM_LIVE=true env var to skip confirmation (for testing).
  */
 export async function promptForLiveConfirmation(
   config: TradingConfig,
   walletDiagnostics: WalletDiagnostics | null
 ): Promise<boolean> {
+  // Auto-confirm for testing (use with caution!)
+  if (process.env.AUTO_CONFIRM_LIVE === 'true') {
+    console.log(`${COLORS.bgYellow}${COLORS.bright} ⚠️  AUTO_CONFIRM_LIVE=true - Skipping confirmation prompt ${COLORS.reset}`);
+    console.log(`${COLORS.bgGreen}${COLORS.bright} ✓ LIVE TRADING AUTO-CONFIRMED ${COLORS.reset}`);
+    return true;
+  }
+
   return new Promise((resolve) => {
     console.log('');
     console.log(`${COLORS.bgRed}${COLORS.bright}                                                                    ${COLORS.reset}`);
@@ -512,13 +521,13 @@ export async function performSafetyVerification(
 
       console.log(`${COLORS.cyan}   Wallet:${COLORS.reset}  ${result.walletDiagnostics.checksumAddress}`);
       
-      // USDC balance
+      // USDC balance (warning only - individual bots have their own wallets)
       if (result.walletDiagnostics.usdcSufficient) {
         console.log(`${COLORS.green}   ✅ USDC:   $${result.walletDiagnostics.usdcBalance.toFixed(2)} (sufficient for $${config.maxTradeSizeUsd} trades)${COLORS.reset}`);
       } else {
-        console.log(`${COLORS.red}   ❌ USDC:   $${result.walletDiagnostics.usdcBalance.toFixed(2)} (INSUFFICIENT - need at least $${config.maxTradeSizeUsd})${COLORS.reset}`);
-        result.warnings.push(`USDC balance ($${result.walletDiagnostics.usdcBalance.toFixed(2)}) is less than MAX_TRADE_SIZE_USD ($${config.maxTradeSizeUsd})`);
-        result.forceMockMode = true;
+        console.log(`${COLORS.yellow}   ⚠️  USDC:   $${result.walletDiagnostics.usdcBalance.toFixed(2)} (low - but bots use their own wallets)${COLORS.reset}`);
+        result.warnings.push(`Global wallet USDC balance ($${result.walletDiagnostics.usdcBalance.toFixed(2)}) is low - individual bot wallets will be used for trading`);
+        // Don't force mock mode - bots have their own funded wallets
       }
 
       // MATIC balance

@@ -370,13 +370,17 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
 
     const normalizedAddress = getAddress(address);
 
-    // Get user and check balance (using Polygon address)
+    // Get user with proxy wallet
     const user = await prisma.user.findUnique({
       where: { polygonAddress: normalizedAddress },
     });
 
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    if (!user.encryptedProxyKey) {
+      return res.status(400).json({ success: false, error: 'User proxy wallet not found' });
     }
 
     if (user.usdcBalance < amount) {
@@ -386,10 +390,13 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
       });
     }
 
-    // Get bot and verify ownership
+    // Get bot with wallet
     const bot = await prisma.bot.findUnique({
       where: { botId },
-      include: { metrics: true },
+      include: { 
+        metrics: true,
+        keys: { take: 1 }
+      },
     });
 
     if (!bot) {
@@ -400,19 +407,66 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, error: 'You can only fund your own bots' });
     }
 
-    // Perform the allocation (deduct from user, add to bot metrics)
+    if (!bot.keys || bot.keys.length === 0 || !bot.keys[0].encryptedPrivKey) {
+      return res.status(400).json({ success: false, error: 'Bot wallet not found' });
+    }
+
+    // Decrypt user's proxy wallet to send from
+    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+    let userPrivateKey: string;
+    try {
+      userPrivateKey = decryptPrivateKey(user.encryptedProxyKey, encryptionSecret);
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'Failed to decrypt user wallet' });
+    }
+
+    // Get bot wallet address (decrypt to get address)
+    let botWalletAddress: string;
+    try {
+      const botPrivKey = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+      const botWallet = new Wallet(botPrivKey);
+      botWalletAddress = botWallet.address;
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'Failed to get bot wallet address' });
+    }
+
+    // Setup provider and wallet
+    const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+    const provider = new JsonRpcProvider(rpcUrl);
+    const userWallet = new Wallet(userPrivateKey, provider);
+    const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, userWallet);
+
+    // Check on-chain balance
+    const onChainBalance = await usdcContract.balanceOf(userWallet.address);
+    const onChainBalanceFormatted = parseFloat(formatUnits(onChainBalance, USDC_DECIMALS));
+
+    if (onChainBalanceFormatted < amount) {
+      return res.status(400).json({
+        success: false,
+        error: `Insufficient on-chain balance. Pool wallet has $${onChainBalanceFormatted.toFixed(2)} USDC`,
+      });
+    }
+
+    // Transfer USDC from user's proxy wallet to bot's wallet
+    console.log(`💸 ALLOCATE: Transferring $${amount} from ${userWallet.address.slice(0,10)}... to bot wallet ${botWalletAddress.slice(0,10)}...`);
+    
+    const amountWei = parseUnits(amount.toFixed(USDC_DECIMALS), USDC_DECIMALS);
+    const tx = await usdcContract.transfer(botWalletAddress, amountWei);
+    const receipt = await tx.wait();
+
+    console.log(`💸 ALLOCATE: TX confirmed: ${receipt.hash}`);
+
+    // Update database
     await prisma.$transaction([
-      // Deduct from user's pool
       prisma.user.update({
         where: { polygonAddress: normalizedAddress },
         data: { usdcBalance: { decrement: amount } },
       }),
-      // Update or create bot metrics with allocated balance
       prisma.botMetrics.upsert({
         where: { botId },
         create: {
           botId,
-          pnlUsd: amount, // Using pnlUsd to track allocated balance for now
+          pnlUsd: amount,
           roiPct: 0,
           trades: 0,
           winRate: 0,
@@ -424,12 +478,11 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
       }),
     ]);
 
-    // Get updated balances
     const updatedUser = await prisma.user.findUnique({
       where: { polygonAddress: normalizedAddress },
     });
 
-    console.log(`💸 ALLOCATE: $${amount} from ${normalizedAddress.slice(0,6)}... to bot ${botId}`);
+    console.log(`💸 ALLOCATE: $${amount} from ${normalizedAddress.slice(0,6)}... to bot ${botId} - SUCCESS`);
 
     res.json({
       success: true,
@@ -437,12 +490,14 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
         allocated: amount,
         userBalance: updatedUser?.usdcBalance || 0,
         botId,
+        txHash: receipt.hash,
+        botWallet: botWalletAddress,
       },
-      message: `Allocated $${amount.toFixed(2)} to bot`,
+      message: `Allocated $${amount.toFixed(2)} to bot (TX: ${receipt.hash.slice(0,10)}...)`,
     });
   } catch (error: any) {
     console.error('Error allocating to bot:', error);
-    res.status(500).json({ success: false, error: 'Failed to allocate funds' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to allocate funds' });
   }
 });
 
@@ -795,6 +850,138 @@ router.post('/bot/:botId/withdraw', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to withdraw from bot',
+    });
+  }
+});
+
+/**
+ * POST /balance/confirm-polymarket-registration
+ * User confirms they have registered their proxy wallet on Polymarket.
+ * This enables trading for their bots.
+ * 
+ * Body: { address: string }
+ */
+router.post('/confirm-polymarket-registration', async (req: Request, res: Response) => {
+  try {
+    const { address } = req.body;
+
+    // Validate address
+    if (!address || !isAddress(address)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid Ethereum address',
+      });
+    }
+
+    const normalizedAddress = getAddress(address);
+
+    // Get user
+    const user = await prisma.user.findUnique({
+      where: { polygonAddress: normalizedAddress },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+      });
+    }
+
+    if (!user.proxyWalletAddress) {
+      return res.status(400).json({
+        success: false,
+        error: 'No proxy wallet found. Please fund your account first.',
+      });
+    }
+
+    // Mark as registered
+    const updatedUser = await prisma.user.update({
+      where: { polygonAddress: normalizedAddress },
+      data: {
+        polymarketRegistered: true,
+      },
+    });
+
+    console.log(`✅ Polymarket registration confirmed for ${normalizedAddress} (proxy: ${user.proxyWalletAddress})`);
+
+    res.json({
+      success: true,
+      data: {
+        address: normalizedAddress,
+        proxyWallet: user.proxyWalletAddress,
+        polymarketRegistered: true,
+      },
+      message: 'Trading enabled! You can now create and run bots.',
+    });
+  } catch (error: any) {
+    console.error('Error confirming Polymarket registration:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to confirm registration',
+    });
+  }
+});
+
+/**
+ * GET /balance/trading-status/:address
+ * Get trading status for a user (whether they can trade on Polymarket).
+ */
+router.get('/trading-status/:address', async (req: Request, res: Response) => {
+  try {
+    const { address } = req.params;
+
+    if (!address || !isAddress(address)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid Ethereum address',
+      });
+    }
+
+    const normalizedAddress = getAddress(address);
+
+    const user = await prisma.user.findUnique({
+      where: { polygonAddress: normalizedAddress },
+    });
+
+    if (!user) {
+      return res.json({
+        success: true,
+        data: {
+          canTrade: false,
+          hasProxyWallet: false,
+          polymarketRegistered: false,
+          message: 'Account not found. Connect your wallet to get started.',
+        },
+      });
+    }
+
+    const hasProxyWallet = !!user.proxyWalletAddress;
+    const canTrade = hasProxyWallet && user.polymarketRegistered;
+
+    let message = '';
+    if (!hasProxyWallet) {
+      message = 'Fund your account to create a trading wallet.';
+    } else if (!user.polymarketRegistered) {
+      message = 'Register your proxy wallet on Polymarket to enable trading.';
+    } else {
+      message = 'Trading is enabled! You can create and run bots.';
+    }
+
+    res.json({
+      success: true,
+      data: {
+        canTrade,
+        hasProxyWallet,
+        proxyWallet: user.proxyWalletAddress,
+        polymarketRegistered: user.polymarketRegistered,
+        message,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error getting trading status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get trading status',
     });
   }
 });

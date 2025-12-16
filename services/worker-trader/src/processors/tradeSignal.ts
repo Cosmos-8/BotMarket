@@ -4,6 +4,7 @@ import {
   mockExecuteOrder,
   MockMarketInfo,
 } from '../lib/mockExecution';
+import { ethers } from 'ethers';
 import {
   getTradingConfig,
   isLiveMode,
@@ -326,12 +327,31 @@ export async function processTradeSignal(
 
     // For live modes that are confirmed, check all kill-switches
     if (effectiveMode !== 'mock' && liveConfirmed) {
+      // Fetch the BOT's wallet balance (not global wallet)
+      let botWalletDiagnostics = walletDiagnostics;
+      
+      if (bot.keys && bot.keys.length > 0 && bot.keys[0].encryptedPrivKey) {
+        try {
+          const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+          const botPrivKey = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+          const botWallet = new ethers.Wallet(botPrivKey);
+          
+          // Fetch bot's actual wallet balance
+          console.log(`${COLORS.cyan}💰 Bot wallet address: ${botWallet.address}${COLORS.reset}`);
+          const { fetchWalletBalances } = await import('../lib/safetyVerification.js');
+          botWalletDiagnostics = await fetchWalletBalances(botWallet.address, sizeUsd);
+          console.log(`${COLORS.cyan}💰 Bot wallet balance: $${botWalletDiagnostics.usdcBalance.toFixed(2)} USDC${COLORS.reset}`);
+        } catch (err) {
+          console.log(`${COLORS.yellow}⚠️  Could not fetch bot wallet balance, using global${COLORS.reset}`);
+        }
+      }
+      
       // Kill-switch check (comprehensive safety verification)
       const killSwitchResult = await checkKillSwitches(
         bot.botId,
         sizeUsd,
         tradingConfig,
-        walletDiagnostics
+        botWalletDiagnostics
       );
 
       if (!killSwitchResult.allowed) {

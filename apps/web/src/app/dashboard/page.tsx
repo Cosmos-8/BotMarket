@@ -17,6 +17,7 @@ import {
 import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseUnits, formatUnits } from 'ethers';
 import { USDC_ADDRESS, ERC20_ABI } from '@/config/contracts';
+import { EnableTrading } from '@/components';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -47,6 +48,7 @@ interface DashboardData {
   proxyWallet: {
     address: string;
     network: string;
+    polymarketRegistered?: boolean;
   } | null;
   bots: Bot[];
   summary: {
@@ -395,6 +397,26 @@ export default function DashboardPage() {
         {/* Trading Pool Tab */}
         {activeTab === 'pool' && data && (
           <div className="space-y-6">
+            {/* Enable Trading Setup (shows if not registered on Polymarket) */}
+            {data.proxyWallet && !data.proxyWallet.polymarketRegistered && (
+              <EnableTrading
+                proxyWalletAddress={data.proxyWallet.address}
+                polymarketRegistered={data.proxyWallet.polymarketRegistered || false}
+                onRegistrationConfirmed={loadDashboard}
+                userAddress={userAddress || ''}
+              />
+            )}
+
+            {/* Trading Enabled Status (shows if registered) */}
+            {data.proxyWallet && data.proxyWallet.polymarketRegistered && (
+              <EnableTrading
+                proxyWalletAddress={data.proxyWallet.address}
+                polymarketRegistered={true}
+                onRegistrationConfirmed={loadDashboard}
+                userAddress={userAddress || ''}
+              />
+            )}
+
             {/* Pool Balance Card */}
             <div className="bg-dark-700 border border-white/5 rounded-xl p-6">
               <h2 className="text-lg font-semibold text-white mb-4 flex items-center space-x-2">
