@@ -19,6 +19,9 @@ export interface TradingConfig {
   walletAddress: string | null;
   clobApiUrl: string;
   gammaApiUrl: string;
+  builderApiKey: string | null;
+  builderSecret: string | null;
+  builderPassphrase: string | null;
 }
 
 export interface SafetyCapViolation {
@@ -122,6 +125,9 @@ export function getTradingConfig(): TradingConfig {
     walletAddress: process.env.POLYMARKET_WALLET_ADDRESS || null,
     clobApiUrl: getClobApiUrl(mode),
     gammaApiUrl: getGammaApiUrl(),
+    builderApiKey: process.env.POLYMARKET_BUILDER_API_KEY || null,
+    builderSecret: process.env.POLYMARKET_BUILDER_SECRET || null,
+    builderPassphrase: process.env.POLYMARKET_BUILDER_PASSPHRASE || null,
   };
 }
 

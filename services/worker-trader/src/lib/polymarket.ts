@@ -16,6 +16,11 @@ import {
 } from '@botmarket/shared';
 import { SignedPolymarketOrder } from './polymarketSigning';
 import { TradingMode, getTradingConfig } from './tradingConfig';
+import {
+  generateBuilderAuthHeaders,
+  hasBuilderCredentials,
+  type BuilderCredentials,
+} from './polymarketBuilderAuth';
 
 // ============================================================================
 // Types
@@ -200,6 +205,7 @@ export async function submitOrderToPolymarket(
   const config = getTradingConfig();
   const baseUrl = config.clobApiUrl;
   const endpoint = `${baseUrl}/order`;
+  const path = '/order'; // Path for builder authentication
   
   console.log(`${COLORS.cyan}📤 Submitting order to Polymarket (${mode})...${COLORS.reset}`);
   console.log(`${COLORS.cyan}   Endpoint:${COLORS.reset} ${endpoint}`);
@@ -230,15 +236,47 @@ export async function submitOrderToPolymarket(
     orderType: 'GTC',
   };
   
+  // Check if builder credentials are available
+  const builderCredentials: BuilderCredentials | null = 
+    config.builderApiKey && config.builderSecret && config.builderPassphrase
+      ? {
+          apiKey: config.builderApiKey,
+          secret: config.builderSecret,
+          passphrase: config.builderPassphrase,
+        }
+      : null;
+  
+  const useBuilderAuth = hasBuilderCredentials(builderCredentials);
+  
+  if (useBuilderAuth) {
+    console.log(`${COLORS.cyan}🔐 Using Builder Program authentication${COLORS.reset}`);
+  }
+  
+  // Prepare headers
+  const requestHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  
+  // Add builder authentication headers if credentials are available
+  if (useBuilderAuth && builderCredentials) {
+    const bodyString = JSON.stringify(payload);
+    const builderHeaders = generateBuilderAuthHeaders(builderCredentials, {
+      method: 'POST',
+      path,
+      body: bodyString,
+    });
+    
+    // Merge builder headers into request headers
+    Object.assign(requestHeaders, builderHeaders);
+  }
+  
   let lastError: Error | null = null;
   
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await axios.post(endpoint, payload, {
         timeout: REQUEST_TIMEOUT,
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: requestHeaders,
       });
       
       // Check for successful response

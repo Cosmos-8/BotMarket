@@ -419,6 +419,14 @@ TRADING_MODE=mock
 POLYMARKET_GAMMA_API=https://gamma-api.polymarket.com
 POLYMARKET_CLOB_API=https://clob.polymarket.com
 
+# Polymarket Builder Program (Optional - for bypassing wallet restrictions)
+# Get these from: https://polymarket.com/settings?tab=builder
+# These credentials allow orders to be attributed to your builder account
+# and can help bypass wallet authorization restrictions
+POLYMARKET_BUILDER_API_KEY=your-api-key
+POLYMARKET_BUILDER_SECRET=your-secret
+POLYMARKET_BUILDER_PASSPHRASE=your-passphrase
+
 # Safety Caps
 MAX_TRADE_SIZE_USD=25
 MAX_DAILY_NOTIONAL_USD=100
