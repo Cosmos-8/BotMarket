@@ -21,6 +21,7 @@ import {
   hasBuilderCredentials,
   type BuilderCredentials,
 } from './polymarketBuilderAuth';
+import { type ApiCredentials } from './polymarketL1Auth';
 
 // ============================================================================
 // Types
@@ -192,11 +193,13 @@ export function getTokenIdForOutcome(
  * 
  * @param order - The signed order to submit
  * @param mode - Trading mode ('gamma' or 'mainnet')
+ * @param l2Credentials - Optional L2 API credentials (derived per wallet). If provided, uses L2 auth.
  * @returns Order response with ID, status, and any fill information
  */
 export async function submitOrderToPolymarket(
   order: SignedPolymarketOrder,
-  mode: TradingMode
+  mode: TradingMode,
+  l2Credentials?: ApiCredentials
 ): Promise<PolymarketOrderResponse> {
   if (mode === 'mock') {
     throw new Error('Cannot submit orders in mock mode');
@@ -213,68 +216,113 @@ export async function submitOrderToPolymarket(
   console.log(`${COLORS.cyan}   Side:${COLORS.reset} ${order.side === '0' ? 'BUY' : 'SELL'}`);
   console.log(`${COLORS.cyan}   Maker:${COLORS.reset} ${order.maker}`);
   
-  // Prepare the request payload
-  const payload = {
+  // Prepare the request payload (matching official Polymarket CLOB client format)
+  // Key insights from @polymarket/clob-client:
+  // - salt must be a number (parseInt)
+  // - side must be "BUY" or "SELL" string
+  // - owner is the API key, not the maker address
+  // - deferExec is required (boolean)
+  // - signatureType stays as number
+  const sideString = order.side === '0' ? 'BUY' : 'SELL';
+  
+  // Note: owner will be set from l2Credentials.apiKey below
+  const buildPayload = (apiKey: string) => ({
+    deferExec: false,
     order: {
-      salt: order.salt,
+      salt: parseInt(order.salt, 10),
       maker: order.maker,
       signer: order.signer,
       taker: order.taker,
       tokenId: order.tokenId,
       makerAmount: order.makerAmount,
       takerAmount: order.takerAmount,
+      side: sideString,
       expiration: order.expiration,
       nonce: order.nonce,
       feeRateBps: order.feeRateBps,
-      side: parseInt(order.side),
       signatureType: parseInt(order.signatureType),
       signature: order.signature,
     },
-    // Owner is the maker address
-    owner: order.maker,
-    // Order type: GTC (Good Till Cancelled)
+    owner: apiKey,
     orderType: 'GTC',
-  };
-  
-  // Check if builder credentials are available
-  const builderCredentials: BuilderCredentials | null = 
-    config.builderApiKey && config.builderSecret && config.builderPassphrase
-      ? {
-          apiKey: config.builderApiKey,
-          secret: config.builderSecret,
-          passphrase: config.builderPassphrase,
-        }
-      : null;
-  
-  const useBuilderAuth = hasBuilderCredentials(builderCredentials);
-  
-  if (useBuilderAuth) {
-    console.log(`${COLORS.cyan}🔐 Using Builder Program authentication${COLORS.reset}`);
-  }
+  });
   
   // Prepare headers
   const requestHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
   };
   
-  // Add builder authentication headers if credentials are available
-  if (useBuilderAuth && builderCredentials) {
-    const bodyString = JSON.stringify(payload);
-    const builderHeaders = generateBuilderAuthHeaders(builderCredentials, {
-      method: 'POST',
-      path,
-      body: bodyString,
-    });
+  // Build the final payload with the API key
+  let finalPayload: ReturnType<typeof buildPayload>;
+  
+  // Use L2 credentials if provided (preferred), otherwise fall back to builder credentials
+  if (l2Credentials) {
+    console.log(`${COLORS.cyan}🔐 Using L2 API credentials (derived for this wallet)${COLORS.reset}`);
     
-    // Merge builder headers into request headers
-    Object.assign(requestHeaders, builderHeaders);
+    // Build payload with the API key as owner
+    finalPayload = buildPayload(l2Credentials.apiKey);
+    const bodyString = JSON.stringify(finalPayload);
+    
+    const l2Headers = generateBuilderAuthHeaders(
+      {
+        apiKey: l2Credentials.apiKey,
+        secret: l2Credentials.secret,
+        passphrase: l2Credentials.passphrase,
+      },
+      {
+        method: 'POST',
+        path,
+        body: bodyString,
+        address: order.maker,
+      }
+    );
+    
+    // Debug: Log auth headers (mask sensitive parts)
+    console.log(`${COLORS.cyan}   Headers:${COLORS.reset}`);
+    console.log(`${COLORS.cyan}     POLY_ADDRESS: ${l2Headers['POLY_ADDRESS']}${COLORS.reset}`);
+    console.log(`${COLORS.cyan}     POLY_API_KEY: ${l2Headers['POLY_API_KEY'].substring(0, 8)}...${COLORS.reset}`);
+    console.log(`${COLORS.cyan}     POLY_TIMESTAMP: ${l2Headers['POLY_TIMESTAMP']}${COLORS.reset}`);
+    console.log(`${COLORS.cyan}     POLY_SIGNATURE: ${l2Headers['POLY_SIGNATURE'].substring(0, 20)}...${COLORS.reset}`);
+    
+    Object.assign(requestHeaders, l2Headers);
+  } else {
+    // Fall back to builder credentials from config (legacy)
+    const builderCredentials: BuilderCredentials | null = 
+      config.builderApiKey && config.builderSecret && config.builderPassphrase
+        ? {
+            apiKey: config.builderApiKey,
+            secret: config.builderSecret,
+            passphrase: config.builderPassphrase,
+          }
+        : null;
+    
+    if (hasBuilderCredentials(builderCredentials) && builderCredentials) {
+      console.log(`${COLORS.yellow}⚠️  Using Builder Program credentials (fallback)${COLORS.reset}`);
+      
+      // Build payload with the builder API key as owner
+      finalPayload = buildPayload(builderCredentials.apiKey);
+      const bodyString = JSON.stringify(finalPayload);
+      
+      const builderHeaders = generateBuilderAuthHeaders(builderCredentials, {
+        method: 'POST',
+        path,
+        body: bodyString,
+        address: order.maker,
+      });
+      
+      Object.assign(requestHeaders, builderHeaders);
+    } else {
+      console.log(`${COLORS.yellow}⚠️  No L2 credentials - order may fail${COLORS.reset}`);
+      // Still need to set a payload even though it will fail
+      finalPayload = buildPayload('');
+    }
   }
   
   let lastError: Error | null = null;
   
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const response = await axios.post(endpoint, payload, {
+      const response = await axios.post(endpoint, finalPayload, {
         timeout: REQUEST_TIMEOUT,
         headers: requestHeaders,
       });
@@ -343,6 +391,8 @@ export async function submitOrderToPolymarket(
           const errorData = axiosError.response.data;
           const errorMessage = errorData?.error || errorData?.message || `API error ${axiosError.response.status}`;
           console.log(`${COLORS.red}❌ Order submission failed: ${errorMessage}${COLORS.reset}`);
+          console.log(`${COLORS.red}   Full error response:${COLORS.reset}`, JSON.stringify(errorData, null, 2));
+          console.log(`${COLORS.red}   Payload sent:${COLORS.reset}`, JSON.stringify(finalPayload, null, 2));
     
     return {
             orderId: '',

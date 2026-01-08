@@ -81,7 +81,7 @@ export interface RequiredEnvVars {
 /** Polygon RPC endpoint for balance checks */
 const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
 
-/** USDC contract address on Polygon */
+/** USDC.e contract address on Polygon (Polymarket's collateral token) */
 const USDC_ADDRESS_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 
 /** Minimum MATIC balance required for gas */
@@ -366,11 +366,22 @@ async function getLastNTradesForBot(botId: string, n: number): Promise<{ pnl: nu
 /**
  * Display a giant warning banner and prompt for confirmation.
  * Returns true only if user types LIVE_CONFIRM.
+ * 
+ * Set AUTO_CONFIRM_LIVE=true to skip the prompt (for deployment/testing).
  */
 export async function promptForLiveConfirmation(
   config: TradingConfig,
   walletDiagnostics: WalletDiagnostics | null
 ): Promise<boolean> {
+  // Check for auto-confirm env var (useful for deployment)
+  if (process.env.AUTO_CONFIRM_LIVE === 'true') {
+    console.log('');
+    console.log(`${COLORS.bgYellow}${COLORS.bright} ⚡ AUTO_CONFIRM_LIVE=true - Skipping confirmation prompt ${COLORS.reset}`);
+    console.log(`${COLORS.yellow}   Live trading enabled automatically for ${config.mode.toUpperCase()} mode.${COLORS.reset}`);
+    console.log('');
+    return true;
+  }
+
   return new Promise((resolve) => {
     console.log('');
     console.log(`${COLORS.bgRed}${COLORS.bright}                                                                    ${COLORS.reset}`);

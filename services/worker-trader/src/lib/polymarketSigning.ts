@@ -55,10 +55,10 @@ export interface PolymarketOrderInput {
   size: string;
   /** Optional fee rate in basis points (default: 0) */
   feeRateBps?: number;
-  /** Optional nonce (auto-generated if not provided) */
-  nonce?: number;
-  /** Optional expiration timestamp in seconds (default: 24h from now) */
-  expiration?: number;
+  /** Optional nonce (defaults to "0") */
+  nonce?: string;
+  /** Optional expiration ('0' for GTC orders, timestamp string for GTD) */
+  expiration?: string;
   /** Optional taker address (default: 0x0 for any taker) */
   taker?: string;
   /** Optional maker address override (default: derived from private key) */
@@ -155,48 +155,51 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 /**
  * Generate a random salt for order uniqueness.
- * Uses cryptographically secure random bytes.
+ * Must be within Number.MAX_SAFE_INTEGER to avoid precision loss when
+ * converted to JSON number by Polymarket API.
  */
 function generateSalt(): string {
-  const randomBytes = ethers.randomBytes(32);
-  return ethers.toBigInt(randomBytes).toString();
+  // Polymarket uses BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER))
+  // We use a similar approach with crypto for better randomness
+  const randomBytes = ethers.randomBytes(6); // 6 bytes = 48 bits, fits in safe integer
+  const salt = ethers.toBigInt(randomBytes);
+  return salt.toString();
 }
 
 /**
- * Generate a nonce based on current timestamp.
+ * Generate a nonce for order signing.
+ * Polymarket uses "0" as the default nonce for orders.
  */
-function generateNonce(): number {
-  return Date.now();
+function generateNonce(): string {
+  return '0';
 }
 
 /**
- * Get default expiration (24 hours from now).
+ * Get default expiration.
+ * For GTC (Good Till Cancelled) orders, expiration must be 0.
+ * For GTD (Good Till Date) orders, use a future timestamp.
  */
-function getDefaultExpiration(): number {
-  return Math.floor(Date.now() / 1000) + 24 * 60 * 60;
-}
-
-/**
- * Convert price (0-100) to wei-like format.
- * Polymarket uses 6 decimal places (USDC precision).
- */
-function priceToWei(price: number): bigint {
-  // Price is in cents (0-100), convert to USDC decimals
-  // For USDC with 6 decimals: 1 USDC = 1,000,000
-  // Price 50 = 0.50 USDC per token = 500,000 in raw
-  return BigInt(Math.round(price * 10000));
+function getDefaultExpiration(): string {
+  // For GTC orders, expiration must be '0'
+  return '0';
 }
 
 /**
  * Calculate maker and taker amounts for an order.
  * 
  * For BUY orders:
- * - makerAmount = size * price (USDC to pay)
- * - takerAmount = size (tokens to receive)
+ * - makerAmount = USDC to pay = tokens × price (in 6-decimal USDC)
+ * - takerAmount = tokens to receive (in 6-decimal format)
  * 
  * For SELL orders:
- * - makerAmount = size (tokens to sell)
- * - takerAmount = size * price (USDC to receive)
+ * - makerAmount = tokens to sell (in 6-decimal format)
+ * - takerAmount = USDC to receive = tokens × price (in 6-decimal USDC)
+ * 
+ * Price is in cents (0-100). Example: price=50 means $0.50 per token.
+ * With USDC having 6 decimals:
+ * - 1 USDC = 1,000,000
+ * - For price=50 and size=2,000,000 (2 tokens):
+ *   makerAmount = 2,000,000 × 50 / 100 = 1,000,000 (1 USDC)
  */
 function calculateAmounts(
   size: string,
@@ -204,21 +207,20 @@ function calculateAmounts(
   side: OrderSide
 ): { makerAmount: string; takerAmount: string } {
   const sizeWei = BigInt(size);
-  const priceWei = priceToWei(price);
   
-  // Price is scaled by 10000, so we need to divide
-  // makerAmount or takerAmount = size * price / 10000
-  const priceMultiplied = (sizeWei * priceWei) / BigInt(10000);
+  // price is in cents (0-100), divide by 100 to get decimal
+  // makerAmount = size * (price / 100)
+  const usdcAmount = (sizeWei * BigInt(price)) / BigInt(100);
   
   if (side === OrderSide.BUY) {
     return {
-      makerAmount: priceMultiplied.toString(),
+      makerAmount: usdcAmount.toString(),
       takerAmount: size,
     };
   } else {
     return {
       makerAmount: size,
-      takerAmount: priceMultiplied.toString(),
+      takerAmount: usdcAmount.toString(),
     };
   }
 }

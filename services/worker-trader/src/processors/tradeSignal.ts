@@ -22,6 +22,8 @@ import {
   logKillSwitchTriggered,
   WalletDiagnostics,
 } from '../lib/safetyVerification';
+import { createOrDeriveApiCredentials } from '../lib/polymarketL1Auth';
+import { ensureUsdcAllowance } from '../lib/usdcAllowance';
 import {
   BotConfig,
   SignalType,
@@ -322,7 +324,10 @@ export async function processTradeSignal(
     // ========================================================================
     // Step 4: Calculate order size and check safety caps (for live modes)
     // ========================================================================
-    const sizeUsd = config.sizing.type === 'fixed_usd' ? config.sizing.value : 25;
+    // Polymarket requires minimum 5 tokens. At $0.50/token, that's $2.50 minimum.
+    const configuredSize = config.sizing.type === 'fixed_usd' ? config.sizing.value : 25;
+    const POLYMARKET_MIN_USD = 3; // $3 ensures we always meet 5 token minimum
+    const sizeUsd = Math.max(configuredSize, POLYMARKET_MIN_USD);
 
     // For live modes that are confirmed, check all kill-switches
     if (effectiveMode !== 'mock' && liveConfirmed) {
@@ -469,6 +474,13 @@ export async function processTradeSignal(
         throw new Error('No trading wallet configured - bot has no proxy wallet and POLYMARKET_PRIVATE_KEY is not set');
     }
 
+      // Ensure USDC allowance is set for the CTF Exchange (one-time operation)
+      console.log(`${COLORS.cyan}💰 Checking USDC allowance...${COLORS.reset}`);
+      const hasBalance = await ensureUsdcAllowance(privateKeyForSigning);
+      if (!hasBalance) {
+        throw new Error('Bot wallet has no USDC balance. Please fund the wallet first.');
+      }
+
       // Calculate price (for limit orders, we'll use mid-price or a reasonable default)
       // In production, this should fetch from the order book
       const price = 50; // 50 cents = $0.50, represents fair value for binary market
@@ -494,6 +506,17 @@ export async function processTradeSignal(
 
       const signedOrder = await signPolymarketOrder(orderInput, privateKeyForSigning);
 
+      // Derive L2 API credentials for this wallet (required for CLOB authentication)
+      console.log(`${COLORS.cyan}🔐 Deriving L2 API credentials for wallet...${COLORS.reset}`);
+      let l2Credentials;
+      try {
+        l2Credentials = await createOrDeriveApiCredentials(privateKeyForSigning);
+        console.log(`${COLORS.green}✅ L2 credentials obtained${COLORS.reset}`);
+      } catch (credError: any) {
+        console.log(`${COLORS.yellow}⚠️  Failed to derive L2 credentials: ${credError.message}${COLORS.reset}`);
+        // Continue without L2 creds - will fall back to builder creds
+      }
+
       // Store order in database first (as PENDING)
     const dbOrder = await prisma.order.create({
       data: {
@@ -510,7 +533,7 @@ export async function processTradeSignal(
 
       // Submit order to Polymarket
       try {
-        const response = await submitOrderToPolymarket(signedOrder, effectiveMode);
+        const response = await submitOrderToPolymarket(signedOrder, effectiveMode, l2Credentials);
 
         if (response.orderId && response.status !== 'CANCELED') {
           // Update order with Polymarket order ID
