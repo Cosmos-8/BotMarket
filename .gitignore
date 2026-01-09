@@ -54,3 +54,5 @@ tmp/
 temp/
 
 .pnpm-store/
+services/worker-trader/.env.save
+*.env.save
