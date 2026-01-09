@@ -420,5 +420,82 @@ router.get('/markets', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /polymarket/positions/:walletAddress
+ * Fetch live positions from Polymarket for a wallet address
+ */
+router.get('/positions/:walletAddress', async (req: Request, res: Response) => {
+  try {
+    const { walletAddress } = req.params;
+
+    if (!walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid wallet address',
+      });
+    }
+
+    console.log(`[Polymarket] Fetching positions for wallet: ${walletAddress}`);
+
+    // Fetch positions from Polymarket data API
+    const response = await axios.get(
+      `https://data-api.polymarket.com/positions?user=${walletAddress.toLowerCase()}`,
+      {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    if (response.status !== 200) {
+      throw new Error(`Polymarket API returned status ${response.status}`);
+    }
+
+    const positions = response.data || [];
+
+    // Format positions for frontend
+    const formattedPositions = positions.map((pos: any) => ({
+      market: pos.title || pos.market?.question || 'Unknown Market',
+      outcome: pos.outcome || pos.asset?.outcome || 'Unknown',
+      shares: parseFloat(pos.size || pos.amount || 0),
+      avgPrice: parseFloat(pos.avgPrice || pos.entry_price || 0),
+      currentPrice: parseFloat(pos.curPrice || pos.current_price || 0),
+      value: parseFloat(pos.currentValue || pos.value || 0),
+      pnl: parseFloat(pos.pnl || 0),
+      pnlPercent: parseFloat(pos.pnlPercent || pos.pnl_percent || 0),
+      marketId: pos.market?.id || pos.conditionId || null,
+      tokenId: pos.asset?.token_id || pos.tokenId || null,
+    }));
+
+    console.log(`[Polymarket] Found ${formattedPositions.length} positions for ${walletAddress.slice(0, 10)}...`);
+
+    res.json({
+      success: true,
+      data: {
+        wallet: walletAddress,
+        positions: formattedPositions,
+        totalValue: formattedPositions.reduce((sum: number, p: any) => sum + (p.value || 0), 0),
+        totalPnl: formattedPositions.reduce((sum: number, p: any) => sum + (p.pnl || 0), 0),
+      },
+    });
+  } catch (error: any) {
+    console.error('[Polymarket] Positions fetch error:', error.message);
+    
+    // Return empty positions on error (wallet might just have no positions)
+    res.json({
+      success: true,
+      data: {
+        wallet: req.params.walletAddress,
+        positions: [],
+        totalValue: 0,
+        totalPnl: 0,
+        error: error.message,
+      },
+    });
+  }
+});
+
 export default router;
 

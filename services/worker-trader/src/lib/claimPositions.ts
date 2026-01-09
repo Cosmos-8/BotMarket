@@ -15,7 +15,8 @@ import { decryptPrivateKey } from '@botmarket/shared';
 // ============================================================================
 
 const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
-const USDC_ADDRESS = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
+// Use USDC.e (bridged USDC) which is what Polymarket uses
+const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const USDC_DECIMALS = 6;
 
 // Polymarket Conditional Token Framework (CTF) contract
@@ -63,6 +64,7 @@ interface ClaimResult {
 
 /**
  * Check if a market is resolved and get the winning outcome
+ * Uses Polymarket's Gamma API to check resolution status
  */
 export async function checkMarketResolution(marketId: string): Promise<{
   resolved: boolean;
@@ -70,32 +72,71 @@ export async function checkMarketResolution(marketId: string): Promise<{
   resolutionDate?: Date;
 }> {
   try {
-    const market = await getMarketData(marketId);
-    if (!market) {
+    // Fetch market data directly from Gamma API to get resolution info
+    const response = await fetch(`https://gamma-api.polymarket.com/markets/${marketId}`);
+    if (!response.ok) {
+      console.log(`[Claim] Market ${marketId} not found in API`);
+      return { resolved: false };
+    }
+    
+    const market = await response.json();
+    
+    // Check if market is still active
+    if (market.active === true || market.closed === false) {
       return { resolved: false };
     }
 
-    // Check if market is active (not resolved)
-    if (market.active) {
-      return { resolved: false };
+    // Market is closed/resolved - determine the winning outcome
+    // Polymarket sets the winning outcome's token price to 1.0 after resolution
+    // We can check the outcome_prices or tokens array
+    
+    let winningOutcome: 'YES' | 'NO' | undefined;
+    
+    // Check tokens array for resolution prices
+    if (market.tokens && Array.isArray(market.tokens)) {
+      for (const token of market.tokens) {
+        const price = parseFloat(token.price || '0');
+        // Winning token has price = 1.0 (or very close to it)
+        if (price >= 0.99) {
+          const outcome = (token.outcome || '').toUpperCase();
+          if (outcome === 'YES' || outcome === 'UP') {
+            winningOutcome = 'YES';
+          } else if (outcome === 'NO' || outcome === 'DOWN') {
+            winningOutcome = 'NO';
+          }
+          break;
+        }
+      }
     }
-
-    // If market is not active, it's resolved
-    // For now, we'll need to check the market's resolution data
-    // Polymarket API should provide this, but we'll use a simple heuristic:
-    // If endDate has passed and market is not active, it's resolved
     
-    // TODO: In production, check Polymarket's resolution API to get the actual winning outcome
-    // For now, we'll assume markets resolve to YES if they're closed
-    // This is a placeholder - you'll need to implement proper resolution checking
+    // Fallback: check outcome_prices if available
+    if (!winningOutcome && market.outcome_prices) {
+      try {
+        const prices = JSON.parse(market.outcome_prices);
+        if (Array.isArray(prices) && prices.length >= 2) {
+          const yesPrice = parseFloat(prices[0]);
+          const noPrice = parseFloat(prices[1]);
+          if (yesPrice >= 0.99) winningOutcome = 'YES';
+          else if (noPrice >= 0.99) winningOutcome = 'NO';
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
     
+    if (!winningOutcome) {
+      console.log(`[Claim] Market ${marketId} is closed but couldn't determine winner`);
+      return { resolved: true }; // Resolved but can't determine winner
+    }
+    
+    console.log(`[Claim] Market ${marketId} resolved - Winner: ${winningOutcome}`);
     return {
       resolved: true,
-      winningOutcome: 'YES', // Placeholder - should be determined from market data
-      resolutionDate: market.endDate ? new Date(market.endDate) : undefined,
+      winningOutcome,
+      resolutionDate: market.end_date_iso ? new Date(market.end_date_iso) : undefined,
     };
   } catch (error: any) {
-    console.error(`Error checking market resolution for ${marketId}:`, error.message);
+    console.error(`[Claim] Error checking market resolution for ${marketId}:`, error.message);
     return { resolved: false };
   }
 }
@@ -218,7 +259,7 @@ export async function claimBotPositions(
     const provider = new JsonRpcProvider(POLYGON_RPC_URL);
     const wallet = new Wallet(privateKey, provider);
     const ctfContract = new Contract(CTF_CONTRACT_ADDRESS, CTF_ABI, wallet);
-    const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, wallet);
+    const usdcContract = new Contract(USDC_E_ADDRESS, USDC_ABI, wallet);
 
     // Calculate total claimable amount
     const totalClaimable = positions.reduce((sum, pos) => sum + pos.balanceUsd, 0);

@@ -84,11 +84,16 @@ export default function DashboardPage() {
   // Bot management state
   const [botActions, setBotActions] = useState<Record<string, { type: 'allocate' | 'withdraw' | 'toggle'; amount?: string }>>({});
   
+  // Copied address feedback
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  
   // USDC transfer contract
   const {
     writeContract: transferUsdc,
     data: transferHash,
     isPending: isTransferPending,
+    error: transferError,
+    isError: isTransferError,
   } = useWriteContract();
   
   const {
@@ -130,7 +135,10 @@ export default function DashboardPage() {
 
   // Handle pool deposit (on-chain USDC transfer)
   const handlePoolDeposit = async () => {
-    if (!userAddress || !dashboardData?.proxyWallet) return;
+    if (!userAddress || !dashboardData?.proxyWallet) {
+      setError('No pool wallet found. Please wait for it to be created.');
+      return;
+    }
     
     const amount = parseFloat(poolDepositAmount);
     if (isNaN(amount) || amount <= 0) {
@@ -143,14 +151,23 @@ export default function DashboardPage() {
     
     try {
       const amountWei = parseUnits(amount.toFixed(6), 6);
+      console.log('Initiating USDC.e transfer:', {
+        from: userAddress,
+        to: dashboardData.proxyWallet.address,
+        amount: amount,
+        amountWei: amountWei.toString(),
+        usdcAddress: USDC_ADDRESS,
+      });
+      
       transferUsdc({
         address: USDC_ADDRESS as `0x${string}`,
         abi: ERC20_ABI,
         functionName: 'transfer',
-        args: [dashboardData.proxyWallet!.address as `0x${string}`, amountWei],
+        args: [dashboardData.proxyWallet.address as `0x${string}`, amountWei],
       });
     } catch (err: any) {
-      setError(err.message || 'Failed to initiate deposit');
+      console.error('Deposit initiation error:', err);
+      setError(err.message || 'Failed to initiate deposit. Check console for details.');
       setIsPoolDepositing(false);
     }
   };
@@ -165,6 +182,15 @@ export default function DashboardPage() {
       setError(null);
     }
   }, [isTransferConfirmed, transferHash, loadDashboard]);
+
+  // Handle transfer errors
+  useEffect(() => {
+    if (isTransferError && transferError) {
+      console.error('Transfer error:', transferError);
+      setError(transferError.message || 'Transfer failed. Make sure you have USDC.e and POL for gas.');
+      setIsPoolDepositing(false);
+    }
+  }, [isTransferError, transferError]);
 
   // Handle pool withdraw
   const handlePoolWithdraw = async () => {
@@ -553,6 +579,55 @@ export default function DashboardPage() {
                         View Details →
                       </button>
                     </div>
+
+                    {/* Bot Wallet Address - FUND HERE */}
+                    {bot.walletAddress && (
+                      <div className="mb-4 p-4 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-medium text-amber-400 flex items-center space-x-1">
+                            <span>💰</span>
+                            <span>Bot Wallet - Send USDC here to fund this bot</span>
+                          </p>
+                          <div className="flex space-x-2">
+                            <a
+                              href={`https://polygonscan.com/address/${bot.walletAddress}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                            >
+                              PolygonScan ↗
+                            </a>
+                            <a
+                              href={`https://polymarket.com/account/${bot.walletAddress}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                            >
+                              Polymarket ↗
+                            </a>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <code className="flex-1 px-3 py-2 bg-dark-600 rounded text-sm text-amber-300 font-mono truncate">
+                            {bot.walletAddress}
+                          </code>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(bot.walletAddress || '');
+                              setCopiedAddress(bot.walletAddress);
+                              setTimeout(() => setCopiedAddress(null), 2000);
+                            }}
+                            className={`px-3 py-2 border rounded transition-colors text-sm ${
+                              copiedAddress === bot.walletAddress
+                                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20'
+                                : 'bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20'
+                            }`}
+                          >
+                            {copiedAddress === bot.walletAddress ? '✓ Copied!' : '📋 Copy'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Bot Metrics */}
                     {bot.metrics && (

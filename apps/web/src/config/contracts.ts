@@ -38,12 +38,15 @@ export const BOT_REGISTRY_ADDRESS: `0x${string}` | null =
 /**
  * USDC Token on Polygon Mainnet.
  * 
- * Default: Circle's official USDC on Polygon Mainnet (native USDC, not bridged)
+ * Using USDC.e (bridged USDC) which is the most common USDC on Polygon.
+ * Native USDC: 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
+ * USDC.e (bridged): 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
+ * 
  * Override via NEXT_PUBLIC_USDC_ADDRESS if needed.
  */
 export const USDC_ADDRESS: `0x${string}` = 
   (process.env.NEXT_PUBLIC_USDC_ADDRESS as `0x${string}`) || 
-  '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
+  '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // USDC.e (bridged)
 
 /**
  * USDC Token Configuration

@@ -14,9 +14,14 @@ const MAX_FUND_AMOUNT = 1_000_000; // Max $1M per transaction
 const MIN_FUND_AMOUNT = 0.01;      // Min $0.01
 const MIN_WITHDRAW_AMOUNT = 0.01;  // Min $0.01 for withdrawal
 
-// USDC Contract on Polygon Mainnet
-const USDC_ADDRESS = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
+// USDC Contracts on Polygon Mainnet
+const USDC_ADDRESS = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'; // Native USDC
+const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // Bridged USDC.e (Polymarket uses this!)
 const USDC_DECIMALS = 6;
+
+// Simple cache to avoid hitting blockchain on every request
+const balanceCache = new Map<string, { balance: number; timestamp: number }>();
+const CACHE_TTL_MS = 15000; // 15 seconds cache
 
 // USDC ABI (minimal - just transfer function)
 const USDC_ABI = [
@@ -100,27 +105,46 @@ async function ensureProxyWallet(userId: string, polygonAddress: string): Promis
  * Only checks the proxy wallet balance (trading pool funds)
  * User's connected wallet balance is separate and should not be included
  */
-async function syncOnChainBalance(userId: string, proxyWalletAddress: string, userAddress: string, encryptedProxyKey: string): Promise<number> {
+async function syncOnChainBalance(userId: string, proxyWalletAddress: string, userAddress: string, encryptedProxyKey: string, forceSync: boolean = false): Promise<number> {
+  // Check cache first (unless force sync)
+  const cacheKey = proxyWalletAddress.toLowerCase();
+  const cached = balanceCache.get(cacheKey);
+  if (!forceSync && cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    return cached.balance;
+  }
+
   try {
     const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
     const provider = new JsonRpcProvider(rpcUrl);
+    
+    // Check both native USDC and USDC.e (bridged) - sum both balances
     const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, provider);
+    const usdceContract = new Contract(USDC_E_ADDRESS, USDC_ABI, provider);
 
     // Only check proxy wallet on-chain balance (this is the trading pool)
-    const proxyBalance = await usdcContract.balanceOf(proxyWalletAddress);
-    const proxyBalanceFormatted = parseFloat(formatUnits(proxyBalance, USDC_DECIMALS));
+    const [nativeBalance, bridgedBalance] = await Promise.all([
+      usdcContract.balanceOf(proxyWalletAddress),
+      usdceContract.balanceOf(proxyWalletAddress),
+    ]);
+    
+    const nativeAmount = parseFloat(formatUnits(nativeBalance, USDC_DECIMALS));
+    const bridgedAmount = parseFloat(formatUnits(bridgedBalance, USDC_DECIMALS));
+    const totalBalance = nativeAmount + bridgedAmount;
+
+    // Update cache
+    balanceCache.set(cacheKey, { balance: totalBalance, timestamp: Date.now() });
 
     // Update database to match proxy wallet's on-chain balance only
-    const user = await prisma.user.update({
+    await prisma.user.update({
       where: { id: userId },
       data: {
-        usdcBalance: proxyBalanceFormatted,
+        usdcBalance: totalBalance,
       },
     });
 
-    console.log(`💰 Synced trading pool balance for ${userAddress}: Proxy wallet (${proxyWalletAddress}) has $${proxyBalanceFormatted.toFixed(2)} USDC`);
+    console.log(`💰 Synced trading pool balance for ${userAddress}: Proxy wallet (${proxyWalletAddress}) has $${totalBalance.toFixed(2)} USDC (native: $${nativeAmount.toFixed(2)}, USDC.e: $${bridgedAmount.toFixed(2)})`);
 
-    return proxyBalanceFormatted;
+    return totalBalance;
   } catch (error: any) {
     console.error('Error syncing on-chain balance:', error);
     throw error;
@@ -169,11 +193,12 @@ router.get('/:address', async (req: Request, res: Response) => {
     });
 
     // Sync on-chain balance if proxy wallet exists and has a key
-    // Always sync if explicitly requested, or if balance is 0 (might have deposits)
+    // Use cache unless ?sync=true is passed
     let syncedBalance = updatedUser?.usdcBalance || user.usdcBalance;
-    if (updatedUser?.proxyWalletAddress && updatedUser?.encryptedProxyKey && (sync || syncedBalance === 0)) {
+    const forceSync = req.query.sync === 'true';
+    if (updatedUser?.proxyWalletAddress && updatedUser?.encryptedProxyKey) {
       try {
-        syncedBalance = await syncOnChainBalance(updatedUser.id, updatedUser.proxyWalletAddress, normalizedAddress, updatedUser.encryptedProxyKey);
+        syncedBalance = await syncOnChainBalance(updatedUser.id, updatedUser.proxyWalletAddress, normalizedAddress, updatedUser.encryptedProxyKey, forceSync);
       } catch (error) {
         console.warn('Failed to sync on-chain balance, using database value:', error);
         // Continue with database value if sync fails
@@ -346,8 +371,8 @@ router.post('/fund', async (req: Request, res: Response) => {
 
 /**
  * POST /balance/allocate-to-bot
- * Allocate funds from user's main pool to a specific bot.
- * This is an internal transfer, not from external wallet.
+ * Allocate funds from user's pool wallet to a specific bot's wallet.
+ * This performs a REAL on-chain USDC.e transfer!
  * 
  * Body: { address: string, botId: string, amount: number }
  */
@@ -370,7 +395,7 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
 
     const normalizedAddress = getAddress(address);
 
-    // Get user and check balance (using Polygon address)
+    // Get user with proxy wallet info
     const user = await prisma.user.findUnique({
       where: { polygonAddress: normalizedAddress },
     });
@@ -379,17 +404,21 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
 
-    if (user.usdcBalance < amount) {
+    // Check if user has a proxy wallet with funds
+    if (!user.proxyWalletAddress || !user.encryptedProxyKey) {
       return res.status(400).json({ 
         success: false, 
-        error: `Insufficient balance. You have $${user.usdcBalance.toFixed(2)} but tried to allocate $${amount.toFixed(2)}` 
+        error: 'No pool wallet found. Please deposit funds to your pool first.' 
       });
     }
 
     // Get bot and verify ownership
     const bot = await prisma.bot.findUnique({
       where: { botId },
-      include: { metrics: true },
+      include: { 
+        metrics: true,
+        keys: { take: 1 },
+      },
     });
 
     if (!bot) {
@@ -400,19 +429,75 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, error: 'You can only fund your own bots' });
     }
 
-    // Perform the allocation (deduct from user, add to bot metrics)
+    // Get bot's wallet address
+    if (!bot.keys || bot.keys.length === 0 || !bot.keys[0].encryptedPrivKey) {
+      return res.status(400).json({ success: false, error: 'Bot wallet not found' });
+    }
+
+    // Decrypt user's pool wallet key
+    const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+    let userPoolPrivateKey: string;
+    try {
+      userPoolPrivateKey = decryptPrivateKey(user.encryptedProxyKey, encryptionSecret);
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'Failed to decrypt pool wallet' });
+    }
+
+    // Get bot's wallet address by decrypting its key
+    let botWalletAddress: string;
+    try {
+      const botPrivateKey = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+      const botWallet = new Wallet(botPrivateKey);
+      botWalletAddress = botWallet.address;
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'Failed to get bot wallet address' });
+    }
+
+    // Setup provider and wallet
+    const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+    const provider = new JsonRpcProvider(rpcUrl);
+    const userPoolWallet = new Wallet(userPoolPrivateKey, provider);
+
+    // Use USDC.e (bridged USDC that Polymarket uses)
+    const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+    const usdceContract = new Contract(USDC_E_ADDRESS, USDC_ABI, userPoolWallet);
+
+    // Check user's on-chain USDC.e balance
+    const onChainBalance = await usdceContract.balanceOf(userPoolWallet.address);
+    const onChainBalanceFormatted = parseFloat(formatUnits(onChainBalance, USDC_DECIMALS));
+
+    if (onChainBalanceFormatted < amount) {
+      return res.status(400).json({ 
+        success: false, 
+        error: `Insufficient on-chain balance. Pool has $${onChainBalanceFormatted.toFixed(2)} USDC.e but tried to allocate $${amount.toFixed(2)}` 
+      });
+    }
+
+    // Perform the on-chain transfer!
+    console.log(`💸 ALLOCATE (on-chain): $${amount} from pool ${userPoolWallet.address.slice(0,10)}... to bot ${botWalletAddress.slice(0,10)}...`);
+    
+    const amountWei = parseUnits(amount.toFixed(USDC_DECIMALS), USDC_DECIMALS);
+    const tx = await usdceContract.transfer(botWalletAddress, amountWei);
+    const receipt = await tx.wait();
+
+    console.log(`✅ ALLOCATE SUCCESS: TX ${receipt.hash}`);
+
+    // Clear balance cache so next request gets fresh data
+    balanceCache.delete(userPoolWallet.address.toLowerCase());
+
+    // Update database after successful on-chain transfer
     await prisma.$transaction([
-      // Deduct from user's pool
+      // Update user's database balance to reflect on-chain state
       prisma.user.update({
         where: { polygonAddress: normalizedAddress },
-        data: { usdcBalance: { decrement: amount } },
+        data: { usdcBalance: onChainBalanceFormatted - amount },
       }),
-      // Update or create bot metrics with allocated balance
+      // Update bot metrics
       prisma.botMetrics.upsert({
         where: { botId },
         create: {
           botId,
-          pnlUsd: amount, // Using pnlUsd to track allocated balance for now
+          pnlUsd: amount,
           roiPct: 0,
           trades: 0,
           winRate: 0,
@@ -424,31 +509,39 @@ router.post('/allocate-to-bot', async (req: Request, res: Response) => {
       }),
     ]);
 
-    // Get updated balances
-    const updatedUser = await prisma.user.findUnique({
-      where: { polygonAddress: normalizedAddress },
-    });
-
-    console.log(`💸 ALLOCATE: $${amount} from ${normalizedAddress.slice(0,6)}... to bot ${botId}`);
+    // Get updated on-chain balance
+    const newOnChainBalance = await usdceContract.balanceOf(userPoolWallet.address);
+    const newBalanceFormatted = parseFloat(formatUnits(newOnChainBalance, USDC_DECIMALS));
 
     res.json({
       success: true,
       data: {
         allocated: amount,
-        userBalance: updatedUser?.usdcBalance || 0,
+        userBalance: newBalanceFormatted,
         botId,
+        botWalletAddress,
+        txHash: receipt.hash,
       },
-      message: `Allocated $${amount.toFixed(2)} to bot`,
+      message: `Successfully transferred $${amount.toFixed(2)} USDC.e to bot wallet on-chain!`,
     });
   } catch (error: any) {
     console.error('Error allocating to bot:', error);
-    res.status(500).json({ success: false, error: 'Failed to allocate funds' });
+    
+    // Provide more helpful error messages
+    if (error.code === 'INSUFFICIENT_FUNDS') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Insufficient POL/MATIC for gas fees in pool wallet' 
+      });
+    }
+    
+    res.status(500).json({ success: false, error: error.message || 'Failed to allocate funds' });
   }
 });
 
 /**
  * GET /balance/bot/:botId
- * Get allocated balance for a specific bot.
+ * Get allocated balance for a specific bot, plus real-time on-chain USDC balance.
  */
 router.get('/bot/:botId', async (req: Request, res: Response) => {
   try {
@@ -456,11 +549,48 @@ router.get('/bot/:botId', async (req: Request, res: Response) => {
 
     const bot = await prisma.bot.findUnique({
       where: { botId },
-      include: { metrics: true },
+      include: { 
+        metrics: true,
+        keys: {
+          take: 1,
+        },
+      },
     });
 
     if (!bot) {
       return res.status(404).json({ success: false, error: 'Bot not found' });
+    }
+
+    // Get on-chain USDC balance if bot has a key
+    let onChainBalance = 0;
+    let walletAddress: string | null = null;
+    
+    if (bot.keys && bot.keys.length > 0 && bot.keys[0].encryptedPrivKey) {
+      try {
+        const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+        const privateKey = decryptPrivateKey(bot.keys[0].encryptedPrivKey, encryptionSecret);
+        const wallet = new Wallet(privateKey);
+        walletAddress = wallet.address;
+        
+        // Get on-chain balance (check both USDC and USDC.e)
+        const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+        const provider = new JsonRpcProvider(rpcUrl);
+        
+        // Check native USDC
+        const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, provider);
+        const usdcBalance = await usdcContract.balanceOf(walletAddress);
+        const usdcAmount = parseFloat(formatUnits(usdcBalance, USDC_DECIMALS));
+        
+        // Check bridged USDC.e (Polymarket uses this!)
+        const usdceContract = new Contract(USDC_E_ADDRESS, USDC_ABI, provider);
+        const usdceBalance = await usdceContract.balanceOf(walletAddress);
+        const usdceAmount = parseFloat(formatUnits(usdceBalance, USDC_DECIMALS));
+        
+        // Return total of both
+        onChainBalance = usdcAmount + usdceAmount;
+      } catch (err) {
+        console.error(`Failed to get on-chain balance for bot ${botId}:`, err);
+      }
     }
 
     res.json({
@@ -468,6 +598,8 @@ router.get('/bot/:botId', async (req: Request, res: Response) => {
       data: {
         botId,
         allocatedBalance: bot.metrics?.pnlUsd || 0, // pnlUsd stores allocated balance
+        onChainBalance, // Real-time USDC balance on Polygon
+        walletAddress,
       },
     });
   } catch (error: any) {
@@ -669,7 +801,10 @@ router.post('/bot/:botId/withdraw', async (req: Request, res: Response) => {
     }
 
     const botBalance = bot.metrics?.pnlUsd || 0;
-    if (botBalance < amount) {
+    
+    // For pool withdrawals, check database balance
+    // For wallet withdrawals, we'll check on-chain balance later
+    if (withdrawToPool && botBalance < amount) {
       return res.status(400).json({
         success: false,
         error: `Insufficient bot balance. Bot has $${botBalance.toFixed(2)} but tried to withdraw $${amount.toFixed(2)}`,
@@ -745,24 +880,53 @@ router.post('/bot/:botId/withdraw', async (req: Request, res: Response) => {
       const rpcUrl = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
       const provider = new JsonRpcProvider(rpcUrl);
 
-      // Create wallet and USDC contract
+      // Create wallet and check both USDC and USDC.e contracts
       const wallet = new Wallet(privateKey, provider);
       const usdcContract = new Contract(USDC_ADDRESS, USDC_ABI, wallet);
+      const usdceContract = new Contract(USDC_E_ADDRESS, USDC_ABI, wallet);
 
-      // Check on-chain balance
-      const onChainBalance = await usdcContract.balanceOf(wallet.address);
-      const onChainBalanceFormatted = parseFloat(formatUnits(onChainBalance, USDC_DECIMALS));
+      // Check on-chain balance for both native USDC and USDC.e
+      const [nativeBalance, bridgedBalance] = await Promise.all([
+        usdcContract.balanceOf(wallet.address),
+        usdceContract.balanceOf(wallet.address),
+      ]);
+      
+      const nativeAmount = parseFloat(formatUnits(nativeBalance, USDC_DECIMALS));
+      const bridgedAmount = parseFloat(formatUnits(bridgedBalance, USDC_DECIMALS));
+      const totalBalance = nativeAmount + bridgedAmount;
 
-      if (onChainBalanceFormatted < amount) {
+      if (totalBalance < amount) {
         return res.status(400).json({
           success: false,
-          error: `Insufficient on-chain balance. Bot wallet has $${onChainBalanceFormatted.toFixed(2)} USDC`,
+          error: `Insufficient on-chain balance. Bot wallet has $${totalBalance.toFixed(2)} USDC (native: $${nativeAmount.toFixed(2)}, USDC.e: $${bridgedAmount.toFixed(2)})`,
         });
       }
 
-      // Transfer USDC
+      // Prefer USDC.e for withdrawal (Polymarket compatibility), fallback to native USDC
       const amountWei = parseUnits(amount.toFixed(USDC_DECIMALS), USDC_DECIMALS);
-      const tx = await usdcContract.transfer(destinationAddress, amountWei);
+      let tx;
+      let tokenUsed: string;
+      
+      if (bridgedAmount >= amount) {
+        // Use USDC.e
+        tx = await usdceContract.transfer(destinationAddress, amountWei);
+        tokenUsed = 'USDC.e';
+      } else if (nativeAmount >= amount) {
+        // Use native USDC
+        tx = await usdcContract.transfer(destinationAddress, amountWei);
+        tokenUsed = 'USDC';
+      } else {
+        // Need to use both - not supported in single tx, use the one with more balance
+        if (bridgedAmount > nativeAmount) {
+          tx = await usdceContract.transfer(destinationAddress, parseUnits(bridgedAmount.toFixed(USDC_DECIMALS), USDC_DECIMALS));
+          tokenUsed = 'USDC.e (partial)';
+        } else {
+          tx = await usdcContract.transfer(destinationAddress, parseUnits(nativeAmount.toFixed(USDC_DECIMALS), USDC_DECIMALS));
+          tokenUsed = 'USDC (partial)';
+        }
+      }
+      
+      console.log(`💸 WITHDRAW: $${amount} ${tokenUsed} from bot ${botId} → ${destinationAddress.slice(0,10)}...`);
       const receipt = await tx.wait();
 
       // Update database balance

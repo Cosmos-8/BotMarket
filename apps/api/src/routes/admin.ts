@@ -61,7 +61,7 @@ router.post('/simulate-fill', async (req: AuthenticatedRequest, res: Response) =
     // Create fill
     const fill = await prisma.fill.create({
       data: {
-        botId: bot.id,
+        botId: bot.botId,  // Use external botId, not internal id
         orderId: order.id,
         price: parseFloat(price),
         size: parseFloat(size),
@@ -120,10 +120,10 @@ router.post('/reset-bot/:botId', async (req: AuthenticatedRequest, res: Response
 
     // Delete all orders, fills, and metrics
     await prisma.$transaction([
-      prisma.fill.deleteMany({ where: { botId: bot.id } }),
-      prisma.order.deleteMany({ where: { botId: bot.id } }),
-      prisma.signal.deleteMany({ where: { botId: bot.id } }),
-      prisma.botMetrics.deleteMany({ where: { botId: bot.id } }),
+      prisma.fill.deleteMany({ where: { botId: bot.botId } }),
+      prisma.order.deleteMany({ where: { botId: bot.botId } }),
+      prisma.signal.deleteMany({ where: { botId: bot.botId } }),
+      prisma.botMetrics.deleteMany({ where: { botId: bot.botId } }),
     ]);
 
     res.json({

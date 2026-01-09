@@ -113,7 +113,7 @@ BotMarket democratizes algorithmic trading on Polymarket by providing:
 │  │   Polymarket    │  │   TradingView    │  │      Polygon Mainnet         │  │
 │  │   Gamma API     │  │    Webhooks      │  │   BotRegistry Contract      │  │
 │  │  Market Data     │  │  LONG/SHORT/     │  │   0x5971...6958             │  │
-│  │  CLOB API        │  │     CLOSE        │  │   USDC (0x3c49...3359)      │  │
+│  │  CLOB API        │  │     CLOSE        │  │   USDC.e (0x2791...4174)    │  │
 │  │  Order Execution │  │                 │  │                             │  │
 │  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -260,9 +260,9 @@ The worker processes these signals:
 ### Automated Position Claiming
 
 When Polymarket markets resolve, winning positions are automatically claimed and funds are credited back to bot accounts. The system:
-- Checks for resolved markets hourly
+- Checks for resolved markets every 15 minutes
 - Identifies winning positions
-- Claims tokens and converts to USDC
+- Claims tokens and converts to USDC.e
 - Updates bot balances automatically
 
 ---
@@ -297,9 +297,10 @@ Polymarket Positions
 
 ### USDC Details
 
-- **Token Address:** `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359` (Circle's native USDC on Polygon)
+- **Token Address:** `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174` (USDC.e - Bridged USDC, what Polymarket uses!)
 - **Decimals:** 6
 - **Network:** Polygon Mainnet
+- **Note:** Native USDC (`0x3c499c...`) is different from USDC.e - Polymarket only accepts USDC.e
 
 ---
 
@@ -456,8 +457,8 @@ NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=
 # Deployed Contract
 NEXT_PUBLIC_BOT_REGISTRY_ADDRESS=0x59713Ff4DFAC5b9C2e6cd695FdB7FE43B2276958
 
-# USDC Address on Polygon
-NEXT_PUBLIC_USDC_ADDRESS=0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
+# USDC.e Address on Polygon (Polymarket's collateral token)
+NEXT_PUBLIC_USDC_ADDRESS=0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
 ```
 
 ---
@@ -649,27 +650,63 @@ forge script script/DeployBotRegistry.s.sol:DeployBotRegistryScript \
 
 ---
 
+## 🔒 Security Considerations
+
+### Implemented Security Measures
+
+| Measure | Description |
+|---------|-------------|
+| **Encrypted Key Storage** | All bot and proxy wallet private keys are encrypted with AES-256-GCM before storage |
+| **Environment Variables** | Sensitive configuration loaded from environment variables, never hardcoded |
+| **Owner-Only Operations** | Private key export and fund withdrawals require wallet signature from bot creator |
+| **Isolated Bot Wallets** | Each bot has its own dedicated wallet, preventing cross-contamination |
+| **Safety Caps** | Maximum trade size and daily volume limits to prevent runaway trading |
+| **Gitignore Protection** | `.env` files are gitignored to prevent accidental secret commits |
+
+### Production Recommendations
+
+⚠️ **Before deploying to production:**
+
+1. **Change default secrets** — Replace `default-secret-change-in-production` in all encryption secrets
+2. **Use strong RPC URLs** — Replace public RPC with dedicated nodes (Alchemy, QuickNode)
+3. **Enable HTTPS** — Use TLS for all API endpoints
+4. **Add rate limiting** — Implement rate limiting on API routes
+5. **Audit logging** — Log all sensitive operations (key exports, withdrawals)
+6. **Key rotation** — Implement periodic encryption key rotation
+7. **Backup strategy** — Regular encrypted backups of database
+
+### What's NOT Stored
+
+- ❌ User wallet private keys (only signature-based auth)
+- ❌ Plaintext private keys in database
+- ❌ API keys in logs (truncated to 8 chars max)
+
+---
+
 ## 🚧 Limitations & Roadmap
 
 ### Current Limitations (MVP)
 
 | Limitation | Reason | Production Solution |
 |------------|--------|---------------------|
-| Mock trading only | Safe demo mode | Integrate CLOB API with real keys |
 | Simplified position claiming | CTF contract integration pending | Full CTF redemption implementation |
 | Basic UI | Time constraints | Full design system, mobile responsive |
+| Single market per bot | MVP simplification | Multi-market support |
 
 ### Roadmap
 
-**Phase 1: Production Trading (Q1)**
-- [x] Direct USDC deposits on Polygon
+**Phase 1: Core Trading ✅ COMPLETE**
+- [x] Direct USDC.e deposits on Polygon
 - [x] Bot start/stop functionality
-- [x] Withdrawal system
+- [x] On-chain fund allocation (Pool → Bot)
+- [x] On-chain withdrawal system (Bot → Wallet)
 - [x] Dashboard for bot management
 - [x] Private key export
-- [ ] Full CTF position claiming implementation
-- [ ] Real order execution with user's API keys
-- [ ] Position tracking and P&L calculation
+- [x] Real order execution via Polymarket CLOB API
+- [x] EIP-712 order signing
+- [x] Polymarket positions display
+- [x] Automatic position claiming (every 15 min)
+- [x] TradingView webhook integration
 
 **Phase 2: Advanced Features (Q2)**
 - [ ] Strategy backtesting

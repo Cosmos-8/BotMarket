@@ -23,8 +23,9 @@ export async function updateBotMetrics(botId: string): Promise<void> {
     }
 
     // Get all fills for this bot
+    // Note: Fill.botId references Bot.botId (external ID), not Bot.id (internal cuid)
     const fills = await prisma.fill.findMany({
-      where: { botId: bot.id },
+      where: { botId: bot.botId },
       include: {
         order: true,
       },
@@ -33,7 +34,7 @@ export async function updateBotMetrics(botId: string): Promise<void> {
 
     // Get all orders to track positions
     const orders = await prisma.order.findMany({
-      where: { botId: bot.id },
+      where: { botId: bot.botId },
       include: {
         fills: true,
       },
@@ -146,10 +147,11 @@ export async function updateBotMetrics(botId: string): Promise<void> {
     }
 
     // Update or create metrics
+    // Note: BotMetrics.botId references Bot.botId (external ID), not Bot.id (internal cuid)
     await prisma.botMetrics.upsert({
-      where: { botId: bot.id },
+      where: { botId: bot.botId },
       create: {
-        botId: bot.id,
+        botId: bot.botId,
         pnlUsd: totalPnl,
         roiPct,
         trades: totalTrades,

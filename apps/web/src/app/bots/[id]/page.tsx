@@ -102,6 +102,43 @@ interface ProxyWallet {
   note: string;
 }
 
+interface Position {
+  market: string;
+  outcome: string;
+  shares: number;
+  avgPrice: number;
+  currentPrice: number;
+  value: number;
+  pnl: number;
+  pnlPercent: number;
+  marketId: string | null;
+  tokenId: string | null;
+}
+
+interface PositionsData {
+  wallet: string;
+  positions: Position[];
+  totalValue: number;
+  totalPnl: number;
+}
+
+async function fetchBotPositions(walletAddress: string): Promise<PositionsData | null> {
+  try {
+    const response = await fetch(`${API_URL}/polymarket/positions/${walletAddress}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const result = await response.json();
+    if (result.success && result.data) {
+      return result.data;
+    }
+    return null;
+  } catch (error) {
+    console.error('[Positions] Failed to fetch positions:', error);
+    return null;
+  }
+}
+
 interface Bot {
   botId: string;
   creator: string;
@@ -153,6 +190,7 @@ interface BotFundingPanelProps {
 function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: BotFundingPanelProps) {
   const [userPoolBalance, setUserPoolBalance] = useState<number>(0);
   const [botAllocatedBalance, setBotAllocatedBalance] = useState<number>(0);
+  const [botOnChainBalance, setBotOnChainBalance] = useState<number>(0);
   const [allocateAmount, setAllocateAmount] = useState<string>('10');
   const [withdrawAmount, setWithdrawAmount] = useState<string>('');
   const [isAllocating, setIsAllocating] = useState(false);
@@ -161,30 +199,40 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isLoadingBalance, setIsLoadingBalance] = useState(true);
 
   // Load user's pool balance and bot's allocated balance
   useEffect(() => {
     async function loadBalances() {
-      if (!userAddress) return;
+      setIsLoadingBalance(true);
       
       try {
-        // Get user's main pool balance
-        const balanceResult = await getBalance(userAddress);
-        if (balanceResult.success) {
-          setUserPoolBalance(balanceResult.data.usdcBalance || 0);
+        // Get user's main pool balance (if connected)
+        if (userAddress) {
+          const balanceResult = await getBalance(userAddress);
+          if (balanceResult.success) {
+            setUserPoolBalance(balanceResult.data.usdcBalance || 0);
+          }
         }
         
-        // Get bot's allocated balance
+        // Get bot's allocated balance + on-chain balance (always load this)
         const botBalanceResult = await getBotBalance(botId);
         if (botBalanceResult.success) {
           setBotAllocatedBalance(botBalanceResult.data.allocatedBalance || 0);
+          setBotOnChainBalance(botBalanceResult.data.onChainBalance || 0);
         }
       } catch (err) {
         console.error('Error loading balances:', err);
+      } finally {
+        setIsLoadingBalance(false);
       }
     }
     
     loadBalances();
+    
+    // Refresh balances every 30 seconds
+    const interval = setInterval(loadBalances, 30000);
+    return () => clearInterval(interval);
   }, [userAddress, botId]);
 
   const handleAllocate = async () => {
@@ -251,7 +299,7 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
       </div>
 
       {/* Balance Overview */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      <div className="grid grid-cols-3 gap-3 mb-4">
         <div className="bg-dark-700/60 rounded-lg p-3">
           <p className="text-xs text-zinc-500 mb-1">Your Pool Balance</p>
           <p className="text-lg font-bold text-white">${userPoolBalance.toFixed(2)}</p>
@@ -260,7 +308,21 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
         <div className="bg-dark-700/60 rounded-lg p-3">
           <p className="text-xs text-zinc-500 mb-1">Bot Allocated</p>
           <p className="text-lg font-bold text-emerald-400">${botAllocatedBalance.toFixed(2)}</p>
-          <p className="text-[10px] text-zinc-500">Ready to trade</p>
+          <p className="text-[10px] text-zinc-500">Internal balance</p>
+        </div>
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+          <p className="text-xs text-amber-400 mb-1 flex items-center space-x-1">
+            <span>💰</span>
+            <span>On-Chain USDC</span>
+          </p>
+          {isLoadingBalance ? (
+            <div className="h-7 flex items-center">
+              <div className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+          ) : (
+            <p className="text-lg font-bold text-amber-400">${botOnChainBalance.toFixed(2)}</p>
+          )}
+          <p className="text-[10px] text-zinc-500">Real-time balance</p>
         </div>
       </div>
 
@@ -343,13 +405,19 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
         </div>
       )}
 
-      {/* Withdrawal Section */}
-      {userAddress && botAllocatedBalance > 0 && (
+      {/* Withdrawal Section - show if database balance OR on-chain balance > 0 */}
+      {userAddress && (botAllocatedBalance > 0 || botOnChainBalance > 0) && (
         <div className="mt-4 p-4 bg-red-500/5 border border-red-500/20 rounded-xl">
           <h4 className="text-sm font-medium text-white mb-3 flex items-center space-x-2">
             <span>📤</span>
             <span>Withdraw from Bot</span>
           </h4>
+          
+          {/* Show available balances */}
+          <div className="flex items-center justify-between text-xs text-zinc-400 mb-2">
+            <span>Internal: ${botAllocatedBalance.toFixed(2)}</span>
+            <span>On-Chain: ${botOnChainBalance.toFixed(2)}</span>
+          </div>
           
           <div className="flex space-x-2 mb-3">
             <div className="flex-1 relative">
@@ -365,16 +433,16 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
             </div>
           </div>
 
-          {/* Quick amounts */}
+          {/* Quick amounts - use max of both balances for "To Wallet" */}
           <div className="flex space-x-2 mb-3">
-            {[10, 25, 50, botAllocatedBalance].filter(amt => amt <= botAllocatedBalance).map((amt) => (
+            {[1, 5, Math.max(botAllocatedBalance, botOnChainBalance)].filter(amt => amt <= Math.max(botAllocatedBalance, botOnChainBalance) && amt > 0).map((amt, idx) => (
               <button
-                key={amt}
-                onClick={() => setWithdrawAmount(amt === botAllocatedBalance ? botAllocatedBalance.toFixed(2) : amt.toString())}
-                disabled={isAllocating || isWithdrawing || botAllocatedBalance < amt}
+                key={idx}
+                onClick={() => setWithdrawAmount(amt === Math.max(botAllocatedBalance, botOnChainBalance) ? Math.max(botAllocatedBalance, botOnChainBalance).toFixed(2) : amt.toString())}
+                disabled={isAllocating || isWithdrawing}
                 className="flex-1 py-1.5 text-xs bg-dark-600 hover:bg-dark-500 text-zinc-400 hover:text-white rounded transition disabled:opacity-30 disabled:cursor-not-allowed"
               >
-                {amt === botAllocatedBalance ? 'Max' : `$${amt}`}
+                {amt === Math.max(botAllocatedBalance, botOnChainBalance) ? 'Max' : `$${amt}`}
               </button>
             ))}
           </div>
@@ -423,13 +491,13 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
               )}
             </button>
 
-            {/* Withdraw to Wallet */}
+            {/* Withdraw to Wallet - uses on-chain balance */}
             <button
               onClick={async () => {
                 if (!userAddress || !withdrawAmount) return;
                 const amount = parseFloat(withdrawAmount);
-                if (isNaN(amount) || amount <= 0 || amount > botAllocatedBalance) {
-                  setError(`Invalid amount. Max: $${botAllocatedBalance.toFixed(2)}`);
+                if (isNaN(amount) || amount <= 0 || amount > botOnChainBalance) {
+                  setError(`Invalid amount. On-chain max: $${botOnChainBalance.toFixed(2)}`);
                   return;
                 }
                 setIsWithdrawing(true);
@@ -441,6 +509,7 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
                     setSuccess(`Successfully withdrew ${amount} USDC to your wallet! TX: ${result.data.txHash.slice(0, 10)}...`);
                     setWithdrawAmount('');
                     setBotAllocatedBalance(result.data.newBotBalance);
+                    setBotOnChainBalance(prev => prev - amount);
                     onFundSuccess();
                   } else {
                     setError(result.error || 'Withdrawal failed');
@@ -451,7 +520,7 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
                   setIsWithdrawing(false);
                 }
               }}
-              disabled={isAllocating || isWithdrawing || !withdrawAmount || parseFloat(withdrawAmount || '0') <= 0 || parseFloat(withdrawAmount || '0') > botAllocatedBalance}
+              disabled={isAllocating || isWithdrawing || !withdrawAmount || parseFloat(withdrawAmount || '0') <= 0 || parseFloat(withdrawAmount || '0') > botOnChainBalance || botOnChainBalance <= 0}
               className="px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg transition disabled:opacity-30 disabled:cursor-not-allowed text-sm font-medium flex items-center justify-center space-x-2"
             >
               {isWithdrawing ? (
@@ -771,6 +840,10 @@ export default function BotDetailPage() {
   const [marketLoading, setMarketLoading] = useState(true);
   const [marketError, setMarketError] = useState(false);
   
+  // Positions state
+  const [positions, setPositions] = useState<PositionsData | null>(null);
+  const [positionsLoading, setPositionsLoading] = useState(false);
+  
   // Delete bot state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -865,11 +938,48 @@ export default function BotDetailPage() {
     return () => clearInterval(interval);
   }, [loadMarketData]);
 
+  // Load positions from Polymarket
+  const loadPositions = useCallback(async (walletAddress: string) => {
+    if (!walletAddress) return;
+    setPositionsLoading(true);
+    try {
+      const data = await fetchBotPositions(walletAddress);
+      if (data) {
+        setPositions(data);
+      }
+    } catch (error) {
+      console.error('Failed to load positions:', error);
+    } finally {
+      setPositionsLoading(false);
+    }
+  }, []);
+
+  // Load positions when bot data is available
+  useEffect(() => {
+    const walletAddress = bot?.proxyWallet?.address;
+    if (walletAddress) {
+      loadPositions(walletAddress);
+    }
+  }, [bot?.proxyWallet?.address, loadPositions]);
+
+  // Refresh positions every 30 seconds
+  useEffect(() => {
+    const walletAddress = bot?.proxyWallet?.address;
+    if (!walletAddress) return;
+    const interval = setInterval(() => {
+      loadPositions(walletAddress);
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [bot?.proxyWallet?.address, loadPositions]);
+
   // Handle sending test signal
   const handleSendSignal = async (signal: SignalType) => {
     try {
       setSendingSignal(true);
       setLoadingSignal(signal);
+      
+      // Show "executing" message immediately
+      setToast({ message: `⏳ Executing ${signal} trade...`, type: 'success' });
       
       await sendTestSignal(botId, signal);
       
@@ -879,16 +989,27 @@ export default function BotDetailPage() {
         ...prev.slice(0, 9), // Keep last 10
       ]);
       
-      setToast({ message: `${signal} signal sent successfully!`, type: 'success' });
+      // Show success with more details
+      const tradeAction = signal === 'LONG' ? 'Buy YES' : signal === 'SHORT' ? 'Sell/Buy NO' : 'Close position';
+      setToast({ message: `✅ ${tradeAction} order submitted! Refreshing data...`, type: 'success' });
       
-      // Refresh bot data and signals after a short delay to allow processing
+      // Refresh bot data, signals, and positions after a short delay
       setTimeout(() => {
         loadBot(false);
         loadSignals();
-      }, 1000);
+        // Also refresh positions to show the new trade
+        if (bot?.proxyWallet?.address) {
+          loadPositions(bot.proxyWallet.address);
+        }
+      }, 2000);
+      
+      // Show final success after data refreshes
+      setTimeout(() => {
+        setToast({ message: `🎉 Trade executed! Check positions below.`, type: 'success' });
+      }, 3000);
     } catch (error: any) {
       setToast({ 
-        message: error.response?.data?.error || error.message || 'Failed to send signal', 
+        message: `❌ ${error.response?.data?.error || error.message || 'Failed to send signal'}`, 
         type: 'error' 
       });
     } finally {
@@ -1223,6 +1344,83 @@ export default function BotDetailPage() {
                   loadingSignal={loadingSignal}
                 />
               </div>
+            </div>
+
+            {/* Polymarket Positions Card */}
+            <div className="bg-dark-700 border border-white/5 rounded-xl p-6">
+              <h2 className="text-lg font-semibold text-white mb-4 flex items-center space-x-2">
+                <span>📊</span>
+                <span>Polymarket Positions</span>
+                {positionsLoading && (
+                  <span className="ml-2 text-xs text-zinc-500">(loading...)</span>
+                )}
+              </h2>
+              
+              {positions && positions.positions.length > 0 ? (
+                <div className="space-y-4">
+                  {/* Summary */}
+                  <div className="flex items-center justify-between p-3 bg-dark-600 rounded-lg">
+                    <div>
+                      <p className="text-xs text-zinc-500">Total Value</p>
+                      <p className="text-lg font-bold text-white">${positions.totalValue.toFixed(2)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-zinc-500">Total P&L</p>
+                      <p className={`text-lg font-bold ${positions.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {positions.totalPnl >= 0 ? '+' : ''}${positions.totalPnl.toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {/* Position List */}
+                  <div className="space-y-3">
+                    {positions.positions.map((position, index) => (
+                      <div key={index} className="p-3 bg-dark-600/50 rounded-lg border border-white/5">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-white font-medium truncate">{position.market}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                position.outcome.toUpperCase() === 'YES' || position.outcome.toUpperCase() === 'UP'
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                  : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                              }`}>
+                                {position.outcome}
+                              </span>
+                              <span className="text-xs text-zinc-500">
+                                {position.shares.toFixed(1)} shares @ {(position.avgPrice * 100).toFixed(0)}¢
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-right ml-4">
+                            <p className="text-sm font-medium text-white">${position.value.toFixed(2)}</p>
+                            <p className={`text-xs ${position.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {position.pnl >= 0 ? '+' : ''}{(position.pnlPercent * 100).toFixed(1)}%
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* View on Polymarket Link */}
+                  {bot.proxyWallet?.address && (
+                    <a
+                      href={`https://polymarket.com/profile/${bot.proxyWallet.address}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block text-center text-xs text-purple-400 hover:text-purple-300 transition mt-2"
+                    >
+                      View full portfolio on Polymarket ↗
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-zinc-500 text-sm">No open positions</p>
+                  <p className="text-zinc-600 text-xs mt-1">Positions will appear here after trades are filled</p>
+                </div>
+              )}
             </div>
 
             {/* Recent Trades Card */}

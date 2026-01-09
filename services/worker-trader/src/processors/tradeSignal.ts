@@ -541,7 +541,7 @@ export async function processTradeSignal(
             where: { id: dbOrder.id },
             data: {
               orderId: response.orderId,
-              status: response.status === 'MATCHED' ? ORDER_STATUS.FILLED : ORDER_STATUS.PENDING,
+              status: response.status?.toUpperCase() === 'MATCHED' ? ORDER_STATUS.FILLED : ORDER_STATUS.PENDING,
             },
           });
 

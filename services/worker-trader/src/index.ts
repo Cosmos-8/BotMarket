@@ -234,8 +234,8 @@ worker.on('error', (err) => {
   // Run immediately
   claimPositions();
 
-  // Then run every hour (3600000 ms)
-  const claimInterval = setInterval(claimPositions, 60 * 60 * 1000);
+  // Then run every 15 minutes (900000 ms) to catch resolved markets faster
+  const claimInterval = setInterval(claimPositions, 15 * 60 * 1000);
 
   // ========================================================================
   // Graceful Shutdown
