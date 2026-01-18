@@ -38,6 +38,10 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
         take: limit,
         include: {
           metrics: true,
+          configs: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
           _count: {
             select: { forkedBots: true },
           },
@@ -74,6 +78,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
         botId: bot.botId,
         creator: bot.creator,
         visibility: bot.visibility,
+        config: bot.configs[0]?.configJSON,
         metrics: bot.metrics ? {
           pnlUsd: bot.metrics.pnlUsd,
           roiPct: bot.metrics.roiPct,

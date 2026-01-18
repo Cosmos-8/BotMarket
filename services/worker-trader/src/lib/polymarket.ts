@@ -287,15 +287,15 @@ export async function submitOrderToPolymarket(
     Object.assign(requestHeaders, l2Headers);
   } else {
     // Fall back to builder credentials from config (legacy)
-    const builderCredentials: BuilderCredentials | null = 
-      config.builderApiKey && config.builderSecret && config.builderPassphrase
-        ? {
-            apiKey: config.builderApiKey,
-            secret: config.builderSecret,
-            passphrase: config.builderPassphrase,
-          }
-        : null;
-    
+  const builderCredentials: BuilderCredentials | null = 
+    config.builderApiKey && config.builderSecret && config.builderPassphrase
+      ? {
+          apiKey: config.builderApiKey,
+          secret: config.builderSecret,
+          passphrase: config.builderPassphrase,
+        }
+      : null;
+  
     if (hasBuilderCredentials(builderCredentials) && builderCredentials) {
       console.log(`${COLORS.yellow}⚠️  Using Builder Program credentials (fallback)${COLORS.reset}`);
       
@@ -303,14 +303,14 @@ export async function submitOrderToPolymarket(
       finalPayload = buildPayload(builderCredentials.apiKey);
       const bodyString = JSON.stringify(finalPayload);
       
-      const builderHeaders = generateBuilderAuthHeaders(builderCredentials, {
-        method: 'POST',
-        path,
-        body: bodyString,
+    const builderHeaders = generateBuilderAuthHeaders(builderCredentials, {
+      method: 'POST',
+      path,
+      body: bodyString,
         address: order.maker,
-      });
-      
-      Object.assign(requestHeaders, builderHeaders);
+    });
+    
+    Object.assign(requestHeaders, builderHeaders);
     } else {
       console.log(`${COLORS.yellow}⚠️  No L2 credentials - order may fail${COLORS.reset}`);
       // Still need to set a payload even though it will fail
@@ -445,6 +445,96 @@ export async function cancelOrder(orderId: string): Promise<boolean> {
   } catch (error: any) {
     console.error(`Error canceling order ${orderId}:`, error.message);
     return false;
+  }
+}
+
+/**
+ * Position information from database orders
+ */
+export interface BotPosition {
+  tokenId: string;
+  outcome: string;
+  side: string;
+  quantity: number;
+  avgPrice: number;
+  marketId: string;
+}
+
+/**
+ * Get bot's current positions based on filled orders in database
+ * Note: This calculates positions from order history, not live Polymarket data
+ */
+export async function getBotPositions(botId: string, prismaClient: any): Promise<BotPosition[]> {
+  try {
+    // Get all filled BUY orders for this bot
+    const filledOrders = await prismaClient.order.findMany({
+      where: {
+        botId,
+        status: 'FILLED',
+      },
+      orderBy: {
+        placedAt: 'asc',
+      },
+    });
+
+    // Aggregate positions by tokenId
+    const positionMap = new Map<string, BotPosition>();
+
+    for (const order of filledOrders) {
+      const key = order.tokenId;
+      const existing = positionMap.get(key);
+
+      if (order.side === 'BUY') {
+        // Buying adds to position
+        if (existing) {
+          const totalQuantity = existing.quantity + order.size;
+          const totalCost = (existing.quantity * existing.avgPrice) + (order.size * order.price);
+          existing.quantity = totalQuantity;
+          existing.avgPrice = totalQuantity > 0 ? totalCost / totalQuantity : 0;
+        } else {
+          positionMap.set(key, {
+            tokenId: order.tokenId,
+            outcome: order.outcome,
+            side: order.side,
+            quantity: order.size,
+            avgPrice: order.price,
+            marketId: order.marketId,
+          });
+        }
+      } else if (order.side === 'SELL') {
+        // Selling reduces position
+        if (existing) {
+          existing.quantity = Math.max(0, existing.quantity - order.size);
+        }
+      }
+    }
+
+    // Filter out zero positions
+    return Array.from(positionMap.values()).filter(p => p.quantity > 0);
+  } catch (error: any) {
+    console.error(`Error getting bot positions for ${botId}:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Get the current best bid price for a token from the orderbook
+ */
+export async function getBestBidPrice(tokenId: string): Promise<number | null> {
+  try {
+    const response = await axios.get(`${CLOB_API}/book`, {
+      timeout: REQUEST_TIMEOUT,
+      params: { token_id: tokenId },
+    });
+
+    if (response.data?.bids && response.data.bids.length > 0) {
+      // Best bid is first in the list
+      return parseFloat(response.data.bids[0].price);
+    }
+    return null;
+  } catch (error: any) {
+    console.error(`Error getting best bid for ${tokenId}:`, error.message);
+    return null;
   }
 }
 

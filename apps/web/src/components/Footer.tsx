@@ -54,9 +54,20 @@ export function Footer() {
           )}
         </div>
 
-        {/* Bottom text */}
-        <div className="mt-6 pt-6 border-t border-white/5 text-center text-xs text-zinc-500">
-          <p>MBC25 Hackathon • No-Code Polymarket Trading Bot Builder & Marketplace</p>
+        {/* Legal Links */}
+        <div className="mt-6 pt-6 border-t border-white/5 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center space-x-4 text-xs text-zinc-500">
+            <a href="/terms" className="hover:text-zinc-300 transition-colors">
+              Terms of Service
+            </a>
+            <span className="text-zinc-600">•</span>
+            <a href="/privacy" className="hover:text-zinc-300 transition-colors">
+              Privacy Policy
+            </a>
+          </div>
+          <p className="text-xs text-zinc-500">
+            © 2026 BotMarket • Not financial advice • Trade at your own risk
+          </p>
         </div>
       </div>
     </footer>

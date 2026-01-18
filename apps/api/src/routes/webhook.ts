@@ -63,22 +63,33 @@ router.post('/:botId', async (req: Request, res: Response) => {
       });
     }
 
-    // Verify webhook secret
+    // Verify webhook secret - REQUIRED in production
     const webhookSecret = req.headers['x-webhook-secret'] as string ||
                          req.headers['authorization']?.replace('Bearer ', '') ||
                          req.headers['x-authorization'] as string;
 
+    const expectedSecret = config.webhook?.secret;
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    if (isProduction && !webhookSecret) {
+      console.warn(`[SECURITY] Rejected webhook for bot ${botId}: No secret provided`);
+      return res.status(401).json({
+        success: false,
+        error: 'Webhook secret required. Include x-webhook-secret header.',
+      });
+    }
+
     if (webhookSecret) {
-      const expectedSecret = config.webhook?.secret;
       if (!expectedSecret || !verifyWebhookSecret(webhookSecret, expectedSecret)) {
+        console.warn(`[SECURITY] Rejected webhook for bot ${botId}: Invalid secret`);
         return res.status(401).json({
           success: false,
           error: 'Invalid webhook secret',
         });
       }
     } else {
-      // Log warning but allow for testing
-      console.warn(`No webhook secret provided for bot ${botId}`);
+      // Allow in development, but log warning
+      console.warn(`[DEV] No webhook secret provided for bot ${botId} - allowed in dev mode only`);
     }
 
     // Parse signal

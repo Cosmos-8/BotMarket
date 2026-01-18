@@ -78,7 +78,7 @@ export async function checkMarketResolution(marketId: string): Promise<{
       console.log(`[Claim] Market ${marketId} not found in API`);
       return { resolved: false };
     }
-    
+
     const market = await response.json();
     
     // Check if market is still active

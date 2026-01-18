@@ -197,6 +197,10 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
         take: limit,
         include: {
           metrics: true,
+          configs: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
           _count: {
             select: { forkedBots: true },
           },
@@ -214,6 +218,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
         visibility: bot.visibility,
         isActive: bot.isActive,
         metrics: bot.metrics,
+        config: bot.configs[0]?.configJSON,
         forkCount: bot._count.forkedBots,
         createdAt: bot.createdAt,
       })),
@@ -638,6 +643,89 @@ router.get('/:id/signals', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 /**
+ * POST /bots/:id/orders/:orderId/cancel
+ * Cancel a pending order
+ */
+router.post('/:id/orders/:orderId/cancel', verifyWallet, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id, orderId } = req.params;
+    const requesterAddress = req.user?.address;
+
+    if (!requesterAddress) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required',
+      });
+    }
+
+    // Get bot to verify ownership
+    const bot = await prisma.bot.findUnique({
+      where: { botId: id },
+    });
+
+    if (!bot) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bot not found',
+      });
+    }
+
+    // Verify requester is bot creator
+    if (bot.creator.toLowerCase() !== requesterAddress.toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only the bot creator can cancel orders',
+      });
+    }
+
+    // Find the order
+    const order = await prisma.order.findFirst({
+      where: {
+        botId: id,
+        orderId: orderId,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found',
+      });
+    }
+
+    if (order.status !== 'PENDING') {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot cancel order with status: ${order.status}`,
+      });
+    }
+
+    // Update order status to cancelled in database
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { status: 'CANCELLED' },
+    });
+
+    console.log(`[ORDER] Cancelled order ${orderId} for bot ${id} by ${requesterAddress}`);
+
+    res.json({
+      success: true,
+      message: 'Order cancelled successfully',
+      data: {
+        orderId,
+        status: 'CANCELLED',
+      },
+    });
+  } catch (error: any) {
+    console.error('Error cancelling order:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to cancel order',
+    });
+  }
+});
+
+/**
  * POST /bots/:id/test-signal
  * Send a test signal (for demo purposes)
  */
@@ -741,7 +829,9 @@ router.get('/:id/export-key', verifyWallet, async (req: AuthenticatedRequest, re
     const wallet = new Wallet(privateKey);
     const walletAddress = wallet.address;
 
-    console.log(`🔑 Private key exported for bot ${id} by ${requesterAddress}`);
+    // SECURITY LOG: Track all key exports
+    console.log(`[SECURITY] 🔑 Private key exported for bot ${id} by ${requesterAddress} at ${new Date().toISOString()}`);
+    console.log(`[SECURITY]    IP: ${req.ip}, User-Agent: ${req.headers['user-agent']?.substring(0, 50)}`);
 
     res.json({
       success: true,

@@ -7,6 +7,7 @@ import { useWallet } from '@/hooks/useWallet';
 import { useCreateBotOnChain } from '@/hooks/useCreateBotOnChain';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { UsdcBalancePanel } from '@/components/UsdcBalancePanel';
+import { RiskDisclaimer } from '@/components/RiskDisclaimer';
 import { getTransactionUrl } from '@/config/contracts';
 
 // ============================================================================
@@ -352,7 +353,12 @@ export default function CreateBotPage() {
     <div className="min-h-screen">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
         <h1 className="text-3xl font-bold text-white mb-2">Create New Bot</h1>
-        <p className="text-zinc-400 mb-8">Configure your automated trading bot for Polymarket</p>
+        <p className="text-zinc-400 mb-6">Configure your automated trading bot for Polymarket</p>
+        
+        {/* Risk Warning */}
+        <div className="mb-8">
+          <RiskDisclaimer compact />
+        </div>
 
         {/* Wallet Connection Required */}
         {!isConnected ? (

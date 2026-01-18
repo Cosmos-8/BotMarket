@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma';
-import { getMarketData, getTokenIdForOutcome, submitOrderToPolymarket } from '../lib/polymarket';
+import { getMarketData, getTokenIdForOutcome, submitOrderToPolymarket, getOrderStatus } from '../lib/polymarket';
 import {
   mockExecuteOrder,
   MockMarketInfo,
@@ -304,11 +304,139 @@ export async function processTradeSignal(
     }
 
     // ========================================================================
-    // Step 2: Handle CLOSE signal
+    // Step 2: Handle CLOSE signal (SELL positions)
     // ========================================================================
     if (signal === SIGNAL_TYPES.CLOSE) {
       console.log(`${COLORS.yellow}📤 CLOSE signal received for bot ${botId}${COLORS.reset}`);
-      console.log(`${COLORS.cyan}   Closing positions... (marking open orders as closed)${COLORS.reset}`);
+      console.log(`${COLORS.cyan}   Attempting to close all positions by submitting SELL orders...${COLORS.reset}`);
+      
+      // Cancel any PENDING orders first
+      const pendingOrders = await prisma.order.updateMany({
+        where: {
+          botId: bot.botId,
+          status: ORDER_STATUS.PENDING,
+        },
+        data: {
+          status: ORDER_STATUS.CANCELLED,
+        },
+      });
+      
+      if (pendingOrders.count > 0) {
+        console.log(`${COLORS.cyan}   Cancelled ${pendingOrders.count} pending orders.${COLORS.reset}`);
+      }
+      
+      // Get bot's current positions
+      const { getBotPositions, getBestBidPrice } = await import('../lib/polymarket');
+      const positions = await getBotPositions(bot.botId, prisma);
+      
+      if (positions.length === 0) {
+        console.log(`${COLORS.yellow}⚠️  No open positions found for bot ${botId}${COLORS.reset}`);
+        console.log(`${COLORS.cyan}   Nothing to close.${COLORS.reset}`);
+        return;
+      }
+      
+      console.log(`${COLORS.cyan}   Found ${positions.length} position(s) to close:${COLORS.reset}`);
+      
+      // For mock mode, just log and return
+      if (effectiveMode === 'mock') {
+        for (const pos of positions) {
+          console.log(`${COLORS.cyan}   - ${pos.outcome}: ${pos.quantity} tokens @ avg $${pos.avgPrice.toFixed(4)}${COLORS.reset}`);
+        }
+        console.log(`${COLORS.yellow}   [MOCK MODE] Would submit SELL orders for above positions${COLORS.reset}`);
+        return;
+      }
+      
+      // For live modes, submit SELL orders for each position
+      let closedCount = 0;
+      let failedCount = 0;
+      
+      for (const position of positions) {
+        try {
+          console.log(`${COLORS.cyan}   Closing position: ${position.outcome} (${position.quantity} tokens)${COLORS.reset}`);
+          
+          // Get best bid price for this token
+          const bestBid = await getBestBidPrice(position.tokenId);
+          if (!bestBid || bestBid <= 0) {
+            console.log(`${COLORS.yellow}   ⚠️  No bids available for ${position.outcome} - skipping${COLORS.reset}`);
+            failedCount++;
+            continue;
+          }
+          
+          // Set sell price slightly below best bid for faster execution
+          const sellPrice = Math.max(0.01, bestBid - 0.01);
+          console.log(`${COLORS.cyan}   Best bid: $${bestBid.toFixed(4)}, selling at: $${sellPrice.toFixed(4)}${COLORS.reset}`);
+          
+          // Get bot's encrypted private key for signing
+          const botKey = await prisma.botKey.findFirst({
+            where: { botId: bot.botId },
+          });
+          
+          if (!botKey?.encryptedPrivKey) {
+            console.log(`${COLORS.red}   ❌ No private key found for bot${COLORS.reset}`);
+            failedCount++;
+            continue;
+          }
+          
+          const encryptionSecret = process.env.BOT_KEY_ENCRYPTION_SECRET || 'default-secret-change-in-production';
+          const privateKey = decryptPrivateKey(botKey.encryptedPrivKey, encryptionSecret);
+          
+          // Sign and submit SELL order
+          // Convert price to cents (0-100 scale) and size to string
+          const priceInCents = Math.round(sellPrice * 100);
+          const orderInput: PolymarketOrderInput = {
+            tokenId: position.tokenId,
+            price: priceInCents,
+            size: position.quantity.toString(),
+            side: PolymarketOrderSide.SELL,
+          };
+          
+          const signedOrder = await signPolymarketOrder(orderInput, privateKey);
+          
+          // Get or create API credentials for this bot
+          const { createOrDeriveApiCredentials } = await import('../lib/polymarketL1Auth');
+          const apiCreds = await createOrDeriveApiCredentials(privateKey);
+          
+          const response = await submitOrderToPolymarket(signedOrder, effectiveMode as any, apiCreds);
+          
+          if (response.orderId && response.status !== 'CANCELED') {
+            // Record the SELL order in database
+            await prisma.order.create({
+              data: {
+                botId: bot.botId,
+                marketId: position.marketId,
+                tokenId: position.tokenId,
+                outcome: position.outcome,
+                side: 'SELL',
+                price: sellPrice,
+                size: position.quantity,
+                status: response.status?.toUpperCase() === 'MATCHED' ? ORDER_STATUS.FILLED : ORDER_STATUS.PENDING,
+                orderId: response.orderId,
+              },
+            });
+            
+            console.log(`${COLORS.green}   ✅ SELL order submitted: ${response.orderId}${COLORS.reset}`);
+            closedCount++;
+          } else {
+            console.log(`${COLORS.red}   ❌ SELL order failed: ${response.errorMsg || 'Unknown error'}${COLORS.reset}`);
+            failedCount++;
+          }
+          
+          // Small delay between orders
+          await new Promise(r => setTimeout(r, 500));
+          
+        } catch (error: any) {
+          console.log(`${COLORS.red}   ❌ Error closing position ${position.outcome}: ${error.message}${COLORS.reset}`);
+          failedCount++;
+        }
+      }
+      
+      console.log('');
+      console.log(`${COLORS.bright}📊 CLOSE SUMMARY${COLORS.reset}`);
+      console.log(`${COLORS.green}   Closed: ${closedCount}${COLORS.reset}`);
+      if (failedCount > 0) {
+        console.log(`${COLORS.red}   Failed: ${failedCount}${COLORS.reset}`);
+      }
+      
       return;
     }
 
@@ -324,9 +452,9 @@ export async function processTradeSignal(
     // ========================================================================
     // Step 4: Calculate order size and check safety caps (for live modes)
     // ========================================================================
-    // Polymarket requires minimum 5 tokens. At $0.50/token, that's $2.50 minimum.
+    // Polymarket requires minimum 5 tokens. At ~$0.50/token, that's ~$2.50 minimum.
     const configuredSize = config.sizing.type === 'fixed_usd' ? config.sizing.value : 25;
-    const POLYMARKET_MIN_USD = 3; // $3 ensures we always meet 5 token minimum
+    const POLYMARKET_MIN_USD = 3; // $3 ensures we meet 5 token minimum
     const sizeUsd = Math.max(configuredSize, POLYMARKET_MIN_USD);
 
     // For live modes that are confirmed, check all kill-switches
@@ -479,7 +607,7 @@ export async function processTradeSignal(
       const hasBalance = await ensureUsdcAllowance(privateKeyForSigning);
       if (!hasBalance) {
         throw new Error('Bot wallet has no USDC balance. Please fund the wallet first.');
-      }
+    }
 
       // Calculate price (for limit orders, we'll use mid-price or a reasonable default)
       // In production, this should fetch from the order book
@@ -537,15 +665,58 @@ export async function processTradeSignal(
 
         if (response.orderId && response.status !== 'CANCELED') {
           // Update order with Polymarket order ID
+          let orderStatus = response.status?.toUpperCase() === 'MATCHED' ? ORDER_STATUS.FILLED : ORDER_STATUS.PENDING;
+          
           await prisma.order.update({
             where: { id: dbOrder.id },
             data: {
               orderId: response.orderId,
-              status: response.status?.toUpperCase() === 'MATCHED' ? ORDER_STATUS.FILLED : ORDER_STATUS.PENDING,
+              status: orderStatus,
             },
           });
 
           logLiveOrderSubmitted(response.orderId, effectiveMode);
+          
+          // If order is LIVE/PENDING, poll for status updates (it may get matched quickly)
+          if (orderStatus === ORDER_STATUS.PENDING) {
+            console.log(`${COLORS.cyan}⏳ Order is LIVE - polling for fill status...${COLORS.reset}`);
+            
+            // Poll every 2 seconds for up to 10 seconds
+            for (let i = 0; i < 5; i++) {
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              
+              try {
+                const statusResponse = await getOrderStatus(response.orderId);
+                if (statusResponse && statusResponse.status) {
+                  const newStatus = statusResponse.status.toUpperCase();
+                  console.log(`${COLORS.cyan}   Poll ${i + 1}: Status = ${newStatus}${COLORS.reset}`);
+                  
+                  if (newStatus === 'MATCHED') {
+                    orderStatus = ORDER_STATUS.FILLED;
+                    await prisma.order.update({
+                      where: { id: dbOrder.id },
+                      data: { status: ORDER_STATUS.FILLED },
+                    });
+                    console.log(`${COLORS.green}✅ Order FILLED!${COLORS.reset}`);
+                    break;
+                  } else if (newStatus === 'CANCELED' || newStatus === 'EXPIRED') {
+                    await prisma.order.update({
+                      where: { id: dbOrder.id },
+                      data: { status: ORDER_STATUS.CANCELLED },
+                    });
+                    console.log(`${COLORS.yellow}⚠️ Order ${newStatus}${COLORS.reset}`);
+                    break;
+                  }
+                }
+              } catch (pollError) {
+                console.log(`${COLORS.yellow}⚠️ Poll error: ${pollError}${COLORS.reset}`);
+              }
+            }
+            
+            if (orderStatus === ORDER_STATUS.PENDING) {
+              console.log(`${COLORS.yellow}⚠️ Order still PENDING after polling. Will be updated by background job.${COLORS.reset}`);
+            }
+          }
 
           // If there are fills, record them
           if (response.fills && response.fills.length > 0) {

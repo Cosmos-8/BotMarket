@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { getMarketplace } from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import { useAccount, useSignMessage } from 'wagmi';
+import { getMarketplace, forkBot } from '@/lib/api';
 import {
   BOT_REGISTRY_ADDRESS,
   getContractUrl,
@@ -29,6 +31,12 @@ interface Bot {
     winRate: number;
     maxDrawdown?: number;
   };
+  config?: {
+    market?: {
+      currency?: string;
+      timeframe?: string;
+    };
+  };
   forkCount?: number;
   createdAt: string;
 }
@@ -48,10 +56,18 @@ const TIMEFRAME_FILTERS: TimeframeFilter[] = ['ALL', '15m', '1h', '4h', '1d'];
 // ============================================================================
 
 /**
- * Extract market from botId (e.g., "demo_btc_4h_momentum" -> "BTC")
+ * Extract market from bot config or botId
  */
-function extractMarket(botId: string): MarketFilter | 'Other' {
-  const id = botId.toLowerCase();
+function extractMarket(bot: Bot): MarketFilter | 'Other' {
+  // First try config
+  const currency = bot.config?.market?.currency?.toUpperCase();
+  if (currency === 'BTC' || currency === 'BITCOIN') return 'BTC';
+  if (currency === 'ETH' || currency === 'ETHEREUM') return 'ETH';
+  if (currency === 'SOL' || currency === 'SOLANA') return 'SOL';
+  if (currency === 'XRP') return 'XRP';
+  
+  // Fallback to botId parsing
+  const id = bot.botId.toLowerCase();
   if (id.includes('btc') || id.includes('bitcoin')) return 'BTC';
   if (id.includes('eth') || id.includes('ethereum')) return 'ETH';
   if (id.includes('sol') || id.includes('solana')) return 'SOL';
@@ -60,10 +76,18 @@ function extractMarket(botId: string): MarketFilter | 'Other' {
 }
 
 /**
- * Extract timeframe from botId (e.g., "demo_btc_4h_momentum" -> "4h")
+ * Extract timeframe from bot config or botId
  */
-function extractTimeframe(botId: string): TimeframeFilter | 'Other' {
-  const id = botId.toLowerCase();
+function extractTimeframe(bot: Bot): TimeframeFilter | 'Other' {
+  // First try config
+  const tf = bot.config?.market?.timeframe?.toLowerCase();
+  if (tf === '15m') return '15m';
+  if (tf === '1h') return '1h';
+  if (tf === '4h') return '4h';
+  if (tf === '1d') return '1d';
+  
+  // Fallback to botId parsing
+  const id = bot.botId.toLowerCase();
   if (id.includes('15m')) return '15m';
   if (id.includes('1h')) return '1h';
   if (id.includes('4h')) return '4h';
@@ -166,8 +190,14 @@ function TopPerformerBadge({ roiPct }: TopPerformerBadgeProps) {
 // ============================================================================
 
 export default function MarketplacePage() {
+  const router = useRouter();
+  const { address, isConnected } = useAccount();
+  const { signMessageAsync } = useSignMessage();
+  
   const [bots, setBots] = useState<Bot[]>([]);
   const [loading, setLoading] = useState(true);
+  const [forkingBotId, setForkingBotId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   
   // Client-side sorting and filtering
   const [sortBy, setSortBy] = useState<SortOption>('roi');
@@ -177,6 +207,51 @@ export default function MarketplacePage() {
   useEffect(() => {
     loadBots();
   }, []);
+
+  // Auto-clear toast
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  const handleForkBot = async (botId: string) => {
+    if (!isConnected || !address) {
+      setToast({ message: 'Please connect your wallet to fork a bot', type: 'error' });
+      return;
+    }
+
+    try {
+      setForkingBotId(botId);
+      
+      // Sign message for authentication
+      const message = `Fork bot ${botId} from BotMarket\nTimestamp: ${Date.now()}`;
+      const signature = await signMessageAsync({ message });
+      
+      // Call fork API
+      const result = await forkBot(botId, {}, {
+        'x-wallet-address': address,
+        'x-wallet-signature': signature,
+        'x-wallet-message': message,
+      });
+      
+      if (result.success) {
+        setToast({ message: `Bot forked successfully! Redirecting...`, type: 'success' });
+        // Redirect to new bot page
+        setTimeout(() => {
+          router.push(`/bots/${result.data.botId}`);
+        }, 1500);
+      } else {
+        setToast({ message: result.error || 'Failed to fork bot', type: 'error' });
+      }
+    } catch (error: any) {
+      console.error('Fork error:', error);
+      setToast({ message: error.message || 'Failed to fork bot', type: 'error' });
+    } finally {
+      setForkingBotId(null);
+    }
+  };
 
   const loadBots = async () => {
     try {
@@ -199,7 +274,7 @@ export default function MarketplacePage() {
     // Filter by market
     if (marketFilter !== 'ALL') {
       result = result.filter((bot) => {
-        const market = extractMarket(bot.botId);
+        const market = extractMarket(bot);
         return market === marketFilter;
       });
     }
@@ -207,7 +282,7 @@ export default function MarketplacePage() {
     // Filter by timeframe
     if (timeframeFilter !== 'ALL') {
       result = result.filter((bot) => {
-        const tf = extractTimeframe(bot.botId);
+        const tf = extractTimeframe(bot);
         return tf === timeframeFilter;
       });
     }
@@ -335,8 +410,8 @@ export default function MarketplacePage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredAndSortedBots.map((bot, index) => {
-              const market = extractMarket(bot.botId);
-              const timeframe = extractTimeframe(bot.botId);
+              const market = extractMarket(bot);
+              const timeframe = extractTimeframe(bot);
               const isTopPerformer = bot.metrics && bot.metrics.roiPct > 20;
               
               return (
@@ -435,13 +510,25 @@ export default function MarketplacePage() {
                     </p>
                     <div className="flex items-center space-x-2">
                       <button
-                        className="px-3 py-1.5 text-xs font-medium text-zinc-400 bg-white/5 rounded-md hover:bg-white/10 hover:text-white transition-colors border border-white/10"
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors border border-white/10 ${
+                          forkingBotId === bot.botId
+                            ? 'bg-accent/20 text-accent cursor-wait'
+                            : 'text-zinc-400 bg-white/5 hover:bg-white/10 hover:text-white'
+                        }`}
                         onClick={(e) => {
                           e.preventDefault();
-                          alert('Fork functionality coming soon!');
+                          handleForkBot(bot.botId);
                         }}
+                        disabled={forkingBotId === bot.botId}
                       >
-                        Fork Bot
+                        {forkingBotId === bot.botId ? (
+                          <span className="flex items-center space-x-1">
+                            <span className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin"></span>
+                            <span>Forking...</span>
+                          </span>
+                        ) : (
+                          'Fork Bot'
+                        )}
                       </button>
                       <Link
                         href={`/bots/${bot.botId}`}
@@ -457,6 +544,20 @@ export default function MarketplacePage() {
           </div>
         )}
       </div>
+      
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed bottom-6 right-6 px-6 py-4 rounded-xl shadow-lg z-50 animate-slide-up ${
+          toast.type === 'success' 
+            ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' 
+            : 'bg-red-500/10 border border-red-500/20 text-red-400'
+        }`}>
+          <div className="flex items-center space-x-3">
+            <span>{toast.type === 'success' ? '✅' : '❌'}</span>
+            <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

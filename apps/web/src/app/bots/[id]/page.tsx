@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { getBot, sendTestSignal, deleteBot, getBotSignals, getBalance, allocateToBot, getBotBalance, startBot, stopBot, withdrawFromBot, exportBotKey } from '@/lib/api';
 import { useAccount, useSignMessage } from 'wagmi';
+import { RiskDisclaimer } from '@/components/RiskDisclaimer';
+import { AIAgentPanel } from '@/components/AIAgentPanel';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 // Webhook URL for TradingView (can be ngrok URL for public access)
@@ -209,9 +211,9 @@ function BotFundingPanel({ proxyWallet, botId, userAddress, onFundSuccess }: Bot
       try {
         // Get user's main pool balance (if connected)
         if (userAddress) {
-          const balanceResult = await getBalance(userAddress);
-          if (balanceResult.success) {
-            setUserPoolBalance(balanceResult.data.usdcBalance || 0);
+        const balanceResult = await getBalance(userAddress);
+        if (balanceResult.success) {
+          setUserPoolBalance(balanceResult.data.usdcBalance || 0);
           }
         }
         
@@ -588,10 +590,12 @@ interface SignalButtonProps {
   onClick: () => void;
   isLoading: boolean;
   loadingSignal: SignalType | null;
+  disabled?: boolean;
 }
 
-function SignalButton({ signal, onClick, isLoading, loadingSignal }: SignalButtonProps) {
+function SignalButton({ signal, onClick, isLoading, loadingSignal, disabled }: SignalButtonProps) {
   const isThisLoading = isLoading && loadingSignal === signal;
+  const isDisabled = isLoading || disabled;
   
   const colors: Record<SignalType, string> = {
     LONG: 'bg-emerald-500 hover:bg-emerald-600 border-emerald-400',
@@ -608,7 +612,7 @@ function SignalButton({ signal, onClick, isLoading, loadingSignal }: SignalButto
   return (
     <button
       onClick={onClick}
-      disabled={isLoading}
+      disabled={isDisabled}
       className={`flex-1 px-4 py-3 ${colors[signal]} text-white rounded-lg font-medium transition-all border-b-4 active:border-b-0 active:mt-1 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2`}
     >
       {isThisLoading ? (
@@ -1317,12 +1321,17 @@ export default function BotDetailPage() {
           <div className="lg:col-span-2 space-y-6">
             {/* Send Test Signal Panel */}
             <div className="bg-dark-700 border border-white/5 rounded-xl p-6">
+              {/* Risk Warning */}
+              <div className="mb-4">
+                <RiskDisclaimer compact />
+              </div>
+              
               <h2 className="text-lg font-semibold text-white mb-2 flex items-center space-x-2">
                 <span>⚡</span>
-                <span>Send Test Signal</span>
+                <span>Send Trade Signal</span>
               </h2>
               <p className="text-sm text-zinc-400 mb-4">
-                Send a mock trading signal to test the bot&apos;s execution pipeline.
+                Send a trading signal to execute on Polymarket. Real money will be used.
               </p>
               <div className="flex space-x-3">
                 <SignalButton
@@ -1330,21 +1339,36 @@ export default function BotDetailPage() {
                   onClick={() => handleSendSignal('LONG')}
                   isLoading={sendingSignal}
                   loadingSignal={loadingSignal}
+                  disabled={!bot.isActive}
                 />
                 <SignalButton
                   signal="SHORT"
                   onClick={() => handleSendSignal('SHORT')}
                   isLoading={sendingSignal}
                   loadingSignal={loadingSignal}
+                  disabled={!bot.isActive}
                 />
                 <SignalButton
                   signal="CLOSE"
                   onClick={() => handleSendSignal('CLOSE')}
                   isLoading={sendingSignal}
                   loadingSignal={loadingSignal}
+                  disabled={!bot.isActive}
                 />
               </div>
+              {!bot.isActive && (
+                <p className="text-xs text-amber-400 mt-2">
+                  ⚠️ Start the bot to enable trading signals
+                </p>
+              )}
             </div>
+
+            {/* AI Agent Panel */}
+            <AIAgentPanel
+              botId={bot.botId}
+              initialConfig={bot.config as any}
+              onConfigUpdate={() => loadBot(false)}
+            />
 
             {/* Polymarket Positions Card */}
             <div className="bg-dark-700 border border-white/5 rounded-xl p-6">

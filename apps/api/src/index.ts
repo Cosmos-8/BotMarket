@@ -1,9 +1,12 @@
 import express, { Express } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import dotenv from 'dotenv';
 import { prisma } from './lib/prisma';
 import { redis } from './lib/redis';
 import { tradeSignalQueue } from './lib/queue';
+import { generalLimiter, strictLimiter, webhookLimiter, authLimiter } from './middleware/rateLimit';
+import { sanitizeInput } from './middleware/sanitize';
 
 // Load environment variables
 dotenv.config();
@@ -11,9 +14,23 @@ dotenv.config();
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Security middleware
+app.use(helmet()); // Sets various HTTP headers for security
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-webhook-secret', 'x-wallet-address', 'x-wallet-signature', 'x-wallet-message'],
+}));
+
+// Body parsing with size limits
+app.use(express.json({ limit: '10kb' })); // Limit JSON body size
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// Apply general rate limiting to all routes
+app.use(generalLimiter);
+
+// Sanitize all input
+app.use(sanitizeInput);
 
 // Request logging
 app.use((req, res, next) => {
@@ -41,14 +58,17 @@ import adminRoutes from './routes/admin';
 import balanceRoutes from './routes/balance';
 import polymarketRoutes from './routes/polymarket';
 import dashboardRoutes from './routes/dashboard';
+import agentRoutes from './routes/agent';
 
+// Routes with appropriate rate limits
 app.use('/bots', botRoutes);
-app.use('/webhook', webhookRoutes);
+app.use('/webhook', webhookLimiter, webhookRoutes);  // Stricter limit for webhooks
 app.use('/marketplace', marketplaceRoutes);
-app.use('/admin', adminRoutes);
-app.use('/balance', balanceRoutes);
+app.use('/admin', authLimiter, adminRoutes);  // Very strict for admin
+app.use('/balance', strictLimiter, balanceRoutes);  // Strict for financial operations
 app.use('/polymarket', polymarketRoutes);
 app.use('/dashboard', dashboardRoutes);
+app.use('/agent', strictLimiter, agentRoutes);  // Strict for AI agent operations
 
 // Start market cache service
 import './services/marketCacheService';
