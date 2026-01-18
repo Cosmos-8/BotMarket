@@ -395,6 +395,8 @@ Access:
 
 ## 🔐 Environment Variables
 
+Use the `.env.example` files as templates and keep real secrets in local `.env`/`.env.local` files only. This repo includes a lightweight secret-scan hook (`scripts/secret-scan.sh`) that runs on commit/push to block common key patterns and staged `.env` files.
+
 ### API (`apps/api/.env`)
 
 ```env

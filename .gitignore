@@ -53,6 +53,9 @@ coverage/
 tmp/
 temp/
 
+# Eliza local state
+.eliza/
+
 .pnpm-store/
 services/worker-trader/.env.save
 *.env.save
